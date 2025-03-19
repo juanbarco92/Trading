@@ -31,14 +31,8 @@ contract2 = fxPair(pair)
 contracts = {
     contract1:[
         {
-         'candlesize':'2 mins',
+         'candlesize':'1 min',
          'duration':'1 D'
-        }
-    ],
-    contract2:[
-        {
-         'candlesize':'2 mins',
-         'duration':'1 D' 
         }
     ]
 }
@@ -52,8 +46,8 @@ app = ForexDataExtractor(contracts)
 app.connect("127.0.0.1", port=7497, clientId=1)
 app.websocket_con()
 # starting a separate daemon thread to execute the websocket connection
-# con_thread = threading.Thread(target=app.websocket_con, daemon=True)
-# con_thread.start()
+#con_thread = threading.Thread(target=app.websocket_con, daemon=True)
+#con_thread.start()
 #time.sleep(4000)
 
 
@@ -78,5 +72,5 @@ app.websocket_con()
 
 
 
-#app.disconnect_from_ib()
+app.disconnect_from_ib()
 
