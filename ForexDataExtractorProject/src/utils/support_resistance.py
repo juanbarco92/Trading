@@ -33,20 +33,70 @@ def calculate_mass(touch_count, revalidation_count, bonus_factor, last_touch_age
     
     return mass
 
-def detect_valleys_in_close(df, prominence=0.0001, distance=5):
-    """Detecta valles (soportes) en la columna 'close'."""
+def detect_valleys_in_close(df, prominence=0.0001, distance=5, time_reference=None):
+    """Detecta valles (soportes) en la columna 'close' e incluye el timestamp."""
     close_array = df['close'].values
     # Invertimos los valores para encontrar los valles como picos invertidos
     valley_indices, properties = find_peaks(-close_array, prominence=prominence, distance=distance)
     prominences = properties["prominences"]
-    return [(int(idx), close_array[idx], float(prom), 'S') for idx, prom in zip(valley_indices, prominences)]
+    
+    result = []
+    for idx, prom in zip(valley_indices, prominences):
+        # Convertir índice local a timestamp si está disponible
+        timestamp = None
+        if time_reference is not None:
+            # Asegurarse de que el acceso a time_reference sea seguro
+            try:
+                if isinstance(time_reference, pd.DatetimeIndex):
+                    # Si es un DatetimeIndex, conseguir el valor directamente
+                    timestamp = time_reference[idx]
+                elif isinstance(time_reference, pd.Series):
+                    # Si es una Series, acceder al valor del índice específico
+                    if idx in time_reference.index:
+                        timestamp = time_reference.iloc[idx]
+                    else:
+                        # Usar una estrategia alternativa si el índice no existe
+                        timestamp = None
+            except (KeyError, IndexError):
+                # Si ocurre un error al acceder al índice, establecer timestamp a None
+                timestamp = None
+        
+        # Incluir timestamp en la tupla de retorno
+        result.append((int(idx), close_array[idx], float(prom), 'S', timestamp))
+    
+    return result
 
-def detect_peaks_in_close(df, prominence=0.0001, distance=5):
-    """Detecta picos en la columna 'close'."""
+def detect_peaks_in_close(df, prominence=0.0001, distance=5, time_reference=None):
+    """Detecta picos en la columna 'close' e incluye el timestamp."""
     close_array = df['close'].values
     peak_indices, properties = find_peaks(close_array, prominence=prominence, distance=distance)
     prominences = properties["prominences"]
-    return [(int(idx), close_array[idx], float(prom), 'R') for idx, prom in zip(peak_indices, prominences)]
+    
+    result = []
+    for idx, prom in zip(peak_indices, prominences):
+        # Convertir índice local a timestamp si está disponible
+        timestamp = None
+        if time_reference is not None:
+            # Asegurarse de que el acceso a time_reference sea seguro
+            try:
+                if isinstance(time_reference, pd.DatetimeIndex):
+                    # Si es un DatetimeIndex, conseguir el valor directamente
+                    timestamp = time_reference[idx]
+                elif isinstance(time_reference, pd.Series):
+                    # Si es una Series, acceder al valor del índice específico
+                    if idx in time_reference.index:
+                        timestamp = time_reference.iloc[idx]
+                    else:
+                        # Usar una estrategia alternativa si el índice no existe
+                        timestamp = None
+            except (KeyError, IndexError):
+                # Si ocurre un error al acceder al índice, establecer timestamp a None
+                timestamp = None
+        
+        # Incluir timestamp en la tupla de retorno
+        result.append((int(idx), close_array[idx], float(prom), 'R', timestamp))
+    
+    return result
 
 def cluster_peaks_dynamic_center(peaks, df, pips_range=0.001, reaction_window=50, current_index=None, level_type='R', K_age=100, T_recency=50, bonus_factor=0.1, gamma=1.5, delta=0.001, epsilon=0.001):
     """
@@ -180,15 +230,24 @@ def cluster_all_points_dynamic(points, df, pips_range=0.001, reaction_window=50,
     # Ordenamos por precio
     points_sorted = sorted(points, key=lambda x: x[1])
     clusters = []
+    
+    # Ahora manejamos puntos con timestamp (5 elementos)
     current_cluster = [points_sorted[0]]
     cluster_center = points_sorted[0][1]
     last_point_index = points_sorted[0][0]
     last_point_type = points_sorted[0][3]
+    last_point_timestamp = points_sorted[0][4] if len(points_sorted[0]) > 4 else None
     revalidation_count = 0
     role_changes = 0  # Contador de cambios de rol
     
     for i in range(1, len(points_sorted)):
-        idx, price, prom, point_type = points_sorted[i]
+        # Extraer componentes del punto, incluyendo timestamp si existe
+        if len(points_sorted[i]) > 4:
+            idx, price, prom, point_type, timestamp = points_sorted[i]
+        else:
+            idx, price, prom, point_type = points_sorted[i]
+            timestamp = None
+            
         dist = abs(price - cluster_center)
         
         if dist <= pips_range:
@@ -199,21 +258,25 @@ def cluster_all_points_dynamic(points, df, pips_range=0.001, reaction_window=50,
             if idx - last_point_index > revalidation_threshold:
                 revalidation_count += 1
                 
-            current_cluster.append((idx, price, prom, point_type))
+            # Guardamos el punto completo con su timestamp
+            current_cluster.append(points_sorted[i])
             cluster_center = np.mean([p[1] for p in current_cluster])
             last_point_index = idx
             last_point_type = point_type
+            if timestamp is not None:
+                last_point_timestamp = timestamp
         else:
             # Procesar el cluster actual
             process_cluster(current_cluster, clusters, df, current_index, reaction_window,
                            role_changes, bonus_factor, role_change_bonus,
-                           gamma, delta, epsilon)
+                           gamma, delta, epsilon, last_point_timestamp)
             
             # Comenzar un nuevo cluster
-            current_cluster = [(idx, price, prom, point_type)]
+            current_cluster = [points_sorted[i]]
             cluster_center = price
             last_point_index = idx
             last_point_type = point_type
+            last_point_timestamp = timestamp
             revalidation_count = 0
             role_changes = 0
     
@@ -221,7 +284,7 @@ def cluster_all_points_dynamic(points, df, pips_range=0.001, reaction_window=50,
     if current_cluster:
         process_cluster(current_cluster, clusters, df, current_index, reaction_window,
                        role_changes, bonus_factor, role_change_bonus,
-                       gamma, delta, epsilon)
+                       gamma, delta, epsilon, last_point_timestamp)
     
     # Ordenar clusters por centro
     clusters.sort(key=lambda c: c['cluster_center'])
@@ -229,14 +292,20 @@ def cluster_all_points_dynamic(points, df, pips_range=0.001, reaction_window=50,
 
 def process_cluster(current_cluster, clusters, df, current_index, reaction_window,
                    role_changes, bonus_factor, role_change_bonus,
-                   gamma, delta, epsilon):
+                   gamma, delta, epsilon, last_point_timestamp=None):
     """
-    Procesa un cluster y calcula sus métricas, incluyendo el impacto de cambios de rol.
+    Procesa un cluster y calcula sus métricas, incluyendo el timestamp del último toque.
     """
     indices = [p[0] for p in current_cluster]
     prices = [p[1] for p in current_cluster]
     prominences = [p[2] for p in current_cluster]
     types = [p[3] for p in current_cluster]
+    
+    # Extraer timestamps si existen
+    timestamps = []
+    for point in current_cluster:
+        if len(point) > 4 and point[4] is not None:
+            timestamps.append(point[4])
     
     touch_count = len(current_cluster)
     prominence_mean = np.mean(prominences)
@@ -264,13 +333,21 @@ def process_cluster(current_cluster, clusters, df, current_index, reaction_windo
             reaction_magnitude = np.max(window_prices) - float(np.mean(prices))
         reaction_magnitude = max(reaction_magnitude, 0)
     
-    # Calcular la masa con el bono por cambio de rol
-    mass = calculate_mass(touch_count, len(current_cluster) - 1, bonus_factor, 
-                         last_touch_age, reaction_magnitude, prominence_mean, 
-                         role_changes, role_change_bonus,
-                         gamma, delta, epsilon)
+    # Determinar el timestamp del último toque
+    last_touch_timestamp = None
+    if timestamps:
+        # Encontrar el timestamp correspondiente al punto con índice máximo
+        max_idx_point = next((p for p in current_cluster if p[0] == max_idx and len(p) > 4), None)
+        if max_idx_point and len(max_idx_point) > 4:
+            last_touch_timestamp = max_idx_point[4]
+        else:
+            # Si no se encuentra, usar el último timestamp disponible
+            last_touch_timestamp = timestamps[-1]
+    else:
+        # Si no hay timestamps, usar el que se pasó como parámetro
+        last_touch_timestamp = last_point_timestamp
     
-    clusters.append({
+    cluster_info = {
         'cluster_center': float(np.mean(prices)),
         'touch_count': touch_count,
         'revalidation_count': len(current_cluster) - 1,
@@ -280,10 +357,15 @@ def process_cluster(current_cluster, clusters, df, current_index, reaction_windo
         'last_touch_age': last_touch_age,
         'role_changes': role_changes,
         'predominant_type': predominant_type,
-        'mass': mass,
         'min_idx': min(indices),
         'max_idx': max_idx
-    })
+    }
+    
+    # Agregar timestamp del último toque si está disponible
+    if last_touch_timestamp is not None:
+        cluster_info['last_touch_timestamp'] = last_touch_timestamp
+    
+    clusters.append(cluster_info)
 
 def find_peaks_and_cluster_dynamic_center(
     df,
@@ -382,11 +464,28 @@ def calculate_progressive_support_resistance(
         
         # Procesar ventana deslizante y detectar puntos
         current_slice = df_working.iloc[start_idx:actual_end].copy()
-        peaks = detect_peaks_in_close(current_slice, prominence=prominence, distance=distance)
-        valleys = detect_valleys_in_close(current_slice, prominence=prominence, distance=distance)
+
+        # Crear una referencia temporal para los puntos dentro de la ventana
+        if has_time_index:
+            # Si el DataFrame original tiene un índice datetime, usar el índice del slice
+            slice_time_reference = current_slice.index
+        else:
+            # Si el DataFrame tiene una columna datetime, usar esa columna como referencia
+            if 'datetime' in current_slice.columns:
+                # Importante: reset_index para que los índices coincidan con las posiciones
+                slice_time_reference = current_slice['datetime'].reset_index(drop=True)
+            else:
+                slice_time_reference = None
+
+        # Llamar a las funciones modificadas pasando la referencia temporal
+        peaks = detect_peaks_in_close(current_slice, prominence=prominence, distance=distance, time_reference=slice_time_reference)
+        valleys = detect_valleys_in_close(current_slice, prominence=prominence, distance=distance, time_reference=slice_time_reference)
+
+        # Combinar y ordenar los puntos
         all_points = peaks + valleys
         all_points.sort(key=lambda x: x[0])
-        all_points = [(idx + start_idx, price, prom, type_) for idx, price, prom, type_ in all_points]
+        # Ajustar el índice pero mantener el timestamp
+        all_points = [(idx + start_idx, price, prom, type_, timestamp) for idx, price, prom, type_, timestamp in all_points]
         
         # Seguimiento de cambios en este ciclo
         updated_in_cycle = set()
@@ -415,94 +514,121 @@ def calculate_progressive_support_resistance(
                         matched_id = level_id
                         best_distance = dist
                 
+                # Depurar el nivel específico
+                debug_specific_level(new_cluster['cluster_center'], new_cluster, 
+                                    active_levels.get(matched_id) if matched_id else None,
+                                    "EVALUANDO COINCIDENCIA")
+                
                 # Actualizar nivel existente o crear uno nuevo
                 if matched_id:
                     # Nivel existente - actualizar propiedades
                     existing = active_levels[matched_id]
-                    
-                    # Crear copia del registro anterior con fecha de fin
-                    hist_record = existing.copy()
-                    hist_record['valid_to_dt'] = current_timestamp
-                    hist_record['is_current'] = False
-                    levels_history.append(hist_record)
-                    
-                    # Actualizar nivel con nuevas propiedades usando lógicas consistentes
-                    updated = {
-                        'id': matched_id,
+                            
+                    # CLAVE: Calcular si realmente hay toques nuevos
+                    # Compara los rangos de índices para ver si hay toques no contabilizados anteriormente
+                    has_new_touches = new_cluster['max_idx'] > existing['max_idx']
+        
+                    if has_new_touches:
+                        debug_specific_level(existing['price'], new_cluster, existing, "ACTUALIZANDO - HAY NUEVOS TOQUES")
+            
+                        # Crear copia del registro anterior con fecha de fin
+                        hist_record = existing.copy()
+                        hist_record['valid_to_dt'] = current_timestamp
+                        hist_record['is_current'] = False
+                        levels_history.append(hist_record)
                         
-                        # Precio: promedio ponderado por cantidad de toques
-                        'price': (existing['price'] * existing['touch_count'] + new_cluster['cluster_center'] * new_cluster['touch_count']) / 
-                                (existing['touch_count'] + new_cluster['touch_count']),
+                        # Actualizar nivel con nuevas propiedades usando lógicas consistentes
+                        updated = {
+                            'id': matched_id,
+                            
+                            # Precio: promedio ponderado por cantidad de toques
+                            'price': (existing['price'] * existing['touch_count'] + new_cluster['cluster_center'] * new_cluster['touch_count']) / 
+                                    (existing['touch_count'] + new_cluster['touch_count']),
+                            
+                            # Touch count: suma (asumimos que son conjuntos diferentes de toques)
+                            'touch_count': existing['touch_count'] + new_cluster['touch_count'],
+                            
+                            # Revalidaciones: suma (son eventos independientes)
+                            'revalidation_count': existing['revalidation_count'] + new_cluster['revalidation_count'],
+                            
+                            # Duración: desde el primer toque hasta el último
+                            'duration': max(existing['max_idx'], new_cluster['max_idx']) - min(existing['min_idx'], new_cluster['min_idx']),
+                            
+                            # Prominencia media: promedio ponderado por toques
+                            'prominence_mean': (existing['prominence_mean'] * existing['touch_count'] + 
+                                            new_cluster['prominence_mean'] * new_cluster['touch_count']) /
+                                            (existing['touch_count'] + new_cluster['touch_count']),
+                            
+                            # Reacción: usar la más significativa
+                            'reaction_magnitude': max(existing['reaction_magnitude'], new_cluster['reaction_magnitude']),
+                            
+                            # Cambios de rol: suma (son eventos acumulativos)
+                            'role_changes': existing['role_changes'] + new_cluster.get('role_changes', 0),
+                            
+                            # Índices de rango: mínimo y máximo combinados
+                            'min_idx': min(existing['min_idx'], new_cluster['min_idx']),
+                            'max_idx': max(existing['max_idx'], new_cluster['max_idx']),
+                            
+                            # Mantener datos de origen originales
+                            'origin_date': existing['origin_date'],
+                            'origin_idx': existing['origin_idx'],
+                            'type': existing['type'],
+                            
+                            # Fechas de validez y última actualización
+                            'valid_from_dt': current_timestamp,
+                            'valid_to_dt': FAR_FUTURE_DATE,
+                            'last_update_dt': current_timestamp,
+                            'last_touch_dt': new_cluster.get('last_touch_timestamp', current_timestamp),  # Usamos el timestamp del último toque
+                            'is_current': True
+                        }
                         
-                        # Touch count: suma (asumimos que son conjuntos diferentes de toques)
-                        'touch_count': existing['touch_count'] + new_cluster['touch_count'],
-                        
-                        # Revalidaciones: suma (son eventos independientes)
-                        'revalidation_count': existing['revalidation_count'] + new_cluster['revalidation_count'],
-                        
-                        # Duración: desde el primer toque hasta el último
-                        'duration': max(existing['max_idx'], new_cluster['max_idx']) - min(existing['min_idx'], new_cluster['min_idx']),
-                        
-                        # Prominencia media: promedio ponderado por toques
-                        'prominence_mean': (existing['prominence_mean'] * existing['touch_count'] + 
-                                          new_cluster['prominence_mean'] * new_cluster['touch_count']) /
-                                          (existing['touch_count'] + new_cluster['touch_count']),
-                        
-                        # Reacción: usar la más significativa
-                        'reaction_magnitude': max(existing['reaction_magnitude'], new_cluster['reaction_magnitude']),
-                        
-                        # Cambios de rol: suma (son eventos acumulativos)
-                        'role_changes': existing['role_changes'] + new_cluster.get('role_changes', 0),
-                        
-                        # Índices de rango: mínimo y máximo combinados
-                        'min_idx': min(existing['min_idx'], new_cluster['min_idx']),
-                        'max_idx': max(existing['max_idx'], new_cluster['max_idx']),
-                        
-                        # Mantener datos de origen originales
-                        'origin_date': existing['origin_date'],
-                        'origin_idx': existing['origin_idx'],
-                        'type': existing['type'],
-                        
-                        # Fechas de validez y última actualización
-                        'valid_from_dt': current_timestamp,
-                        'valid_to_dt': FAR_FUTURE_DATE,
-                        'last_update_dt': current_timestamp,
-                        'last_touch_dt': current_timestamp,  # Fecha del último toque
-                        'is_current': True
-                    }
-                    
-                    current_levels[matched_id] = updated
-                    updated_in_cycle.add(matched_id)
-                
-                else:
-                    # Nuevo nivel - crear registro desde cero
-                    origin_idx = new_cluster['max_idx']
+                        current_levels[matched_id] = updated
+                        updated_in_cycle.add(matched_id)
+                    else:
+                        # Si no hay toques nuevos, mantener el nivel sin cambios
+                        debug_specific_level(existing['price'], new_cluster, existing, "MANTENIENDO - NO HAY TOQUES NUEVOS")
+                        current_levels[matched_id] = existing
+                        updated_in_cycle.add(matched_id)
+                            
+            else:
+                # Nuevo nivel - crear registro desde cero
+                origin_idx = new_cluster['max_idx']
+                # Verifica que el índice esté dentro del rango válido
+                if 0 <= origin_idx < len(time_reference):
                     origin_date = time_reference[origin_idx]
                     
-                    new_level = {
-                        'id': next_id,
-                        'price': new_cluster['cluster_center'],
-                        'touch_count': new_cluster['touch_count'],
-                        'revalidation_count': new_cluster['revalidation_count'],
-                        'duration': new_cluster['duration'],
-                        'prominence_mean': new_cluster['prominence_mean'],
-                        'reaction_magnitude': new_cluster['reaction_magnitude'],
-                        'role_changes': new_cluster.get('role_changes', 0),
-                        'min_idx': new_cluster['min_idx'],
-                        'max_idx': new_cluster['max_idx'],
-                        'origin_date': origin_date,
-                        'origin_idx': origin_idx,
-                        'type': 'Soporte' if new_cluster['predominant_type'] == 'S' else 'Resistencia',
-                        'valid_from_dt': current_timestamp,
-                        'valid_to_dt': FAR_FUTURE_DATE,
-                        'last_update_dt': current_timestamp,
-                        'last_touch_dt': current_timestamp,
-                        'is_current': True
-                    }
-                    
-                    current_levels[next_id] = new_level
-                    updated_in_cycle.add(next_id)
-                    next_id += 1
+                    # Asegúrate de que last_touch_dt refleje la fecha del último toque real
+                    last_touch_idx = new_cluster['max_idx']
+                    last_touch_dt = time_reference[last_touch_idx] if 0 <= last_touch_idx < len(time_reference) else current_timestamp
+                else:
+                    # Usar una fecha por defecto o la actual si el índice está fuera de rango
+                    origin_date = current_timestamp
+                    last_touch_dt = current_timestamp
+                
+                new_level = {
+                    'id': next_id,
+                    'price': new_cluster['cluster_center'],
+                    'touch_count': new_cluster['touch_count'],
+                    'revalidation_count': new_cluster['revalidation_count'],
+                    'duration': new_cluster['duration'],
+                    'prominence_mean': new_cluster['prominence_mean'],
+                    'reaction_magnitude': new_cluster['reaction_magnitude'],
+                    'role_changes': new_cluster.get('role_changes', 0),
+                    'min_idx': new_cluster['min_idx'],
+                    'max_idx': new_cluster['max_idx'],
+                    'origin_date': origin_date,
+                    'origin_idx': origin_idx,
+                    'type': 'Soporte' if new_cluster['predominant_type'] == 'S' else 'Resistencia',
+                    'valid_from_dt': current_timestamp,
+                    'valid_to_dt': FAR_FUTURE_DATE,
+                    'last_update_dt': current_timestamp,
+                    'last_touch_dt': new_cluster.get('last_touch_timestamp', current_timestamp),  # Usamos el timestamp del último toque
+                    'is_current': True
+                }
+                
+                current_levels[next_id] = new_level
+                updated_in_cycle.add(next_id)
+                next_id += 1
             
             # Mantener los niveles antiguos que no fueron actualizados
             for level_id, existing_level in active_levels.items():
@@ -526,4 +652,28 @@ def calculate_progressive_support_resistance(
     history_df = pd.DataFrame(levels_history)
     
     return history_df
+
+# Añade esta función para depurar específicamente el nivel 1.3022
+def debug_specific_level(level_price, new_cluster, matched_level=None, operation=None):
+    # Definir el nivel específico a rastrear
+    TARGET_LEVEL = 1.3022
+    TOLERANCE = 0.0002
+    
+    # Solo depurar si estamos cerca del nivel objetivo
+    if abs(level_price - TARGET_LEVEL) <= TOLERANCE:
+        print(f"\n--- DEBUG NIVEL {TARGET_LEVEL} [{operation}] ---")
+        print(f"Precio del nivel: {level_price}")
+        
+        if matched_level:
+            print(f"Nivel existente ID: {matched_level['id']}")
+            print(f"Toques acumulados: {matched_level['touch_count']}")
+            print(f"Última fecha de toque: {matched_level.get('last_touch_dt')}")
+        
+        print(f"Nuevo cluster encontrado:")
+        print(f"  - Centro: {new_cluster['cluster_center']}")
+        print(f"  - Toques: {new_cluster['touch_count']}")
+        print(f"  - Índice máx: {new_cluster['max_idx']}")
+        if 'last_touch_timestamp' in new_cluster:
+            print(f"  - Último toque: {new_cluster['last_touch_timestamp']}")
+        print("-----------------------------------\n")
 
