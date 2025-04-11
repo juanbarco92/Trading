@@ -43,7 +43,7 @@ def analizar_metricas_por_umbral(y_pred_proba, df_test, pip_objetivo=20, pip_sto
         compra_sin_alcance = ((compra_preds) & (prob_df['actual_compra'] == 'SIN_ALCANCE')).sum()
         compra_total = compra_preds.sum()
         compra_precision = compra_correct/compra_total if compra_total > 0 else 0
-        compra_profit = (compra_correct * pip_objetivo) + (compra_sin_alcance * 4) - (compra_stop * pip_stop)
+        compra_profit = (compra_correct * pip_objetivo) + (compra_sin_alcance * 2.5) - (compra_stop * pip_stop)
         compra_metrics.append((threshold, compra_precision, compra_total, compra_profit))
         
         # Para predicciones de venta
@@ -53,7 +53,7 @@ def analizar_metricas_por_umbral(y_pred_proba, df_test, pip_objetivo=20, pip_sto
         venta_sin_alcance = ((venta_preds) & (prob_df['actual_venta'] == 'SIN_ALCANCE')).sum()
         venta_total = venta_preds.sum()
         venta_precision = venta_correct/venta_total if venta_total > 0 else 0
-        venta_profit = (venta_correct * pip_objetivo)+ (venta_sin_alcance * 4) - (venta_stop * pip_stop)
+        venta_profit = (venta_correct * pip_objetivo)+ (venta_sin_alcance * 2.5) - (venta_stop * pip_stop)
         venta_metrics.append((threshold, venta_precision, venta_total, venta_profit))
     
     # Convertir métricas a DataFrames

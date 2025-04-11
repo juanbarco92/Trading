@@ -1,37 +1,73 @@
 import numpy as np
 import pandas as pd 
 from scipy.signal import find_peaks
+import json
+import datetime
 
+def detect_valleys_in_low(df, prominence=0.0001, distance=5, time_reference=None):
+    """Detecta valles (soportes) en la columna 'low' e incluye el timestamp."""
+    low_array = df['low'].values
+    # Invertimos los valores para encontrar los valles como picos invertidos
+    valley_indices, properties = find_peaks(-low_array, prominence=prominence, distance=distance)
+    prominences = properties["prominences"]
+    
+    result = []
+    for idx, prom in zip(valley_indices, prominences):
+        # Convertir índice local a timestamp si está disponible
+        timestamp = None
+        if time_reference is not None:
+            # Asegurarse de que el acceso a time_reference sea seguro
+            try:
+                if isinstance(time_reference, pd.DatetimeIndex):
+                    # Si es un DatetimeIndex, conseguir el valor directamente
+                    timestamp = time_reference[idx]
+                elif isinstance(time_reference, pd.Series):
+                    # Si es una Series, acceder al valor del índice específico
+                    if idx in time_reference.index:
+                        timestamp = time_reference.iloc[idx]
+                    else:
+                        # Usar una estrategia alternativa si el índice no existe
+                        timestamp = None
+            except (KeyError, IndexError):
+                # Si ocurre un error al acceder al índice, establecer timestamp a None
+                timestamp = None
+        
+        # Incluir timestamp en la tupla de retorno
+        result.append((int(idx), low_array[idx], float(prom), 'S', timestamp))
+    
+    return result
 
-# Funciones para análisis de soportes y resistencias
-def calculate_mass(touch_count, revalidation_count, bonus_factor, last_touch_age, 
-                  reaction_magnitude, prominence_mean, role_changes=0, role_change_bonus=1.5, 
-                  gamma=5, delta=5, epsilon=0.5):
-    """
-    Calcula la masa del cluster usando suma ponderada de componentes, priorizando
-    el número de toques y la antigüedad.
-    """
-    # Componente base: toques y revalidaciones (50% del peso total)
-    base_component = gamma * (touch_count + (revalidation_count * bonus_factor))
+def detect_peaks_in_high(df, prominence=0.0001, distance=5, time_reference=None):
+    """Detecta picos en la columna 'high' e incluye el timestamp."""
+    high_array = df['high'].values
+    peak_indices, properties = find_peaks(high_array, prominence=prominence, distance=distance)
+    prominences = properties["prominences"]
     
-    # Componente de antigüedad (30% del peso total)
-    # Función exponencial que decae mucho más rápido con la antigüedad
-    recency_factor = np.exp(-last_touch_age * 0.05)  # Decae muy rápidamente
-    time_component = delta * recency_factor  
+    result = []
+    for idx, prom in zip(peak_indices, prominences):
+        # Convertir índice local a timestamp si está disponible
+        timestamp = None
+        if time_reference is not None:
+            # Asegurarse de que el acceso a time_reference sea seguro
+            try:
+                if isinstance(time_reference, pd.DatetimeIndex):
+                    # Si es un DatetimeIndex, conseguir el valor directamente
+                    timestamp = time_reference[idx]
+                elif isinstance(time_reference, pd.Series):
+                    # Si es una Series, acceder al valor del índice específico
+                    if idx in time_reference.index:
+                        timestamp = time_reference.iloc[idx]
+                    else:
+                        # Usar una estrategia alternativa si el índice no existe
+                        timestamp = None
+            except (KeyError, IndexError):
+                # Si ocurre un error al acceder al índice, establecer timestamp a None
+                timestamp = None
+        
+        # Incluir timestamp en la tupla de retorno
+        result.append((int(idx), high_array[idx], float(prom), 'R', timestamp))
     
-    # Componente de cambio de rol (10% del peso total)
-    role_component = 1.0 * (role_changes * role_change_bonus)
-    
-    # Componente de reacción del mercado (5% del peso total)
-    reaction_component = epsilon * reaction_magnitude * 100  # Escalamos para que sea significativo
-    
-    # Componente de prominencia (5% del peso total)
-    prominence_component = 0.5 * prominence_mean * 100  # Escalamos para que sea significativo
-    
-    # Suma ponderada total
-    mass = base_component + time_component + role_component + reaction_component + prominence_component
-    
-    return mass
+    return result
 
 def detect_valleys_in_close(df, prominence=0.0001, distance=5, time_reference=None):
     """Detecta valles (soportes) en la columna 'close' e incluye el timestamp."""
@@ -98,126 +134,7 @@ def detect_peaks_in_close(df, prominence=0.0001, distance=5, time_reference=None
     
     return result
 
-def cluster_peaks_dynamic_center(peaks, df, pips_range=0.001, reaction_window=50, current_index=None, level_type='R', K_age=100, T_recency=50, bonus_factor=0.1, gamma=1.5, delta=0.001, epsilon=0.001):
-    """
-    Agrupa los picos en clusters con centro dinámico.
-    Calcula `last_touch_age`, `reaction_magnitude` y `mass` dentro del mismo proceso.
-    """
-    if not peaks:
-        return []
-    
-    revalidation_threshold = 50  # Número de velas para considerar revalidación
-    
-    peaks_sorted = sorted(peaks, key=lambda x: x[1])  # Ordenar por precio
-    clusters = []
-    current_cluster = [peaks_sorted[0]]
-    cluster_center = peaks_sorted[0][1]
-    last_peak_index = peaks_sorted[0][0]
-    revalidation_count = 0
-    
-    for i in range(1, len(peaks_sorted)):
-        idx, price, prom = peaks_sorted[i]
-        dist = abs(price - cluster_center)
-        
-        if dist <= pips_range:
-            if idx - last_peak_index > revalidation_threshold:
-                revalidation_count += 1
-            current_cluster.append((idx, price, prom))
-            cluster_center = np.mean([p[1] for p in current_cluster])
-            last_peak_index = idx
-        else:
-            indices = [p[0] for p in current_cluster]
-            prices = [p[1] for p in current_cluster]
-            prominences = [p[2] for p in current_cluster]
-            touch_count = len(current_cluster)
-            prominence_mean = np.mean(prominences)
-            duration = max(indices) - min(indices)
-            max_idx = max(indices)
-            
-            # Calcular last_touch_age dentro del mismo loop
-            last_touch_age = current_index - max_idx if current_index else 0
-            
-            # Calcular reaction_magnitude dentro del mismo loop
-            start = max_idx + 1
-            end = min(start + reaction_window, len(df))
-            if start >= len(df):
-                reaction_magnitude = 0
-            else:
-                window_prices = df.iloc[start:end]['close'].values
-                if level_type == 'R':
-                    reaction_magnitude = cluster_center - np.min(window_prices)
-                else:
-                    reaction_magnitude = np.max(window_prices) - cluster_center
-                reaction_magnitude = max(reaction_magnitude, 0)  # Evitar valores negativos
-            
-            # Calcular la masa dentro del mismo loop
-            mass = calculate_mass(touch_count, revalidation_count, bonus_factor, last_touch_age,
-                                  reaction_magnitude, prominence_mean, 0, 1.5,
-                                  gamma, delta, epsilon)
-            
-            clusters.append({
-                'cluster_center': float(np.mean(prices)),
-                'touch_count': touch_count,
-                'revalidation_count': revalidation_count,
-                'duration': duration,
-                'prominence_mean': prominence_mean,
-                'reaction_magnitude': reaction_magnitude,
-                'last_touch_age': last_touch_age,
-                'mass': mass,  # Se guarda directamente
-                'min_idx': min(indices),
-                'max_idx': max_idx
-            })
-            
-            current_cluster = [(idx, price, prom)]
-            cluster_center = price
-            last_peak_index = idx
-            revalidation_count = 0
-    
-    if current_cluster:
-        indices = [p[0] for p in current_cluster]
-        prices = [p[1] for p in current_cluster]
-        prominences = [p[2] for p in current_cluster]
-        touch_count = len(current_cluster)
-        prominence_mean = np.mean(prominences)
-        duration = max(indices) - min(indices)
-        max_idx = max(indices)
-        last_touch_age = current_index - max_idx if current_index else 0
-
-        start = max_idx + 1
-        end = min(start + reaction_window, len(df))
-        if start >= len(df):
-            reaction_magnitude = 0
-        else:
-            window_prices = df.iloc[start:end]['close'].values
-            if level_type == 'R':
-                reaction_magnitude = cluster_center - np.min(window_prices)
-            else:
-                reaction_magnitude = np.max(window_prices) - cluster_center
-            reaction_magnitude = max(reaction_magnitude, 0)
-
-        mass = calculate_mass(touch_count, revalidation_count, bonus_factor, last_touch_age,
-                              reaction_magnitude, prominence_mean, 0, 1.5,
-                              gamma, delta, epsilon)
-
-        clusters.append({
-            'cluster_center': float(np.mean(prices)),
-            'touch_count': touch_count,
-            'revalidation_count': revalidation_count,
-            'duration': duration,
-            'prominence_mean': prominence_mean,
-            'reaction_magnitude': reaction_magnitude,
-            'last_touch_age': last_touch_age,
-            'mass': mass,
-            'min_idx': min(indices),
-            'max_idx': max_idx
-        })
-    
-    clusters.sort(key=lambda c: c['cluster_center'])
-    return clusters
-
-def cluster_all_points_dynamic(points, df, pips_range=0.001, reaction_window=50, current_index=None, 
-                              bonus_factor=0.1, role_change_bonus=1.5, 
-                              gamma=1.5, delta=0.001, epsilon=0.001):
+def cluster_all_points_dynamic(points, df, pips_range=0.001, reaction_window=50, current_index=None):
     """
     Agrupa todos los puntos (picos y valles) en clusters con centro dinámico,
     teniendo en cuenta los cambios de rol.
@@ -268,8 +185,7 @@ def cluster_all_points_dynamic(points, df, pips_range=0.001, reaction_window=50,
         else:
             # Procesar el cluster actual
             process_cluster(current_cluster, clusters, df, current_index, reaction_window,
-                           role_changes, bonus_factor, role_change_bonus,
-                           gamma, delta, epsilon, last_point_timestamp)
+                           role_changes, last_point_timestamp)
             
             # Comenzar un nuevo cluster
             current_cluster = [points_sorted[i]]
@@ -283,16 +199,14 @@ def cluster_all_points_dynamic(points, df, pips_range=0.001, reaction_window=50,
     # Procesar el último cluster si existe
     if current_cluster:
         process_cluster(current_cluster, clusters, df, current_index, reaction_window,
-                       role_changes, bonus_factor, role_change_bonus,
-                       gamma, delta, epsilon, last_point_timestamp)
+                       role_changes, last_point_timestamp)
     
     # Ordenar clusters por centro
     clusters.sort(key=lambda c: c['cluster_center'])
     return clusters
 
 def process_cluster(current_cluster, clusters, df, current_index, reaction_window,
-                   role_changes, bonus_factor, role_change_bonus,
-                   gamma, delta, epsilon, last_point_timestamp=None):
+                   role_changes, last_point_timestamp=None):
     """
     Procesa un cluster y calcula sus métricas, incluyendo el timestamp del último toque.
     """
@@ -319,6 +233,10 @@ def process_cluster(current_cluster, clusters, df, current_index, reaction_windo
     
     # Calcular last_touch_age
     last_touch_age = current_index - max_idx if current_index else 0
+    
+    # Llamar a la función de depuración antes del cálculo de magnitud 
+    cluster_center = float(np.mean(prices))
+    debug_reaction_magnitude(cluster_center, predominant_type, max_idx, df, reaction_window, prices)
     
     # Calcular reaction_magnitude según el tipo predominante
     start = max_idx + 1
@@ -367,48 +285,6 @@ def process_cluster(current_cluster, clusters, df, current_index, reaction_windo
     
     clusters.append(cluster_info)
 
-def find_peaks_and_cluster_dynamic_center(
-    df,
-    max_rows=10000,
-    prominence=0.0001,
-    distance=5,
-    pips_range=0.001,
-    reaction_window=50,
-    K_age=100,
-    T_recency=50,
-    bonus_factor=0.1,
-    role_change_bonus=1.5,
-    gamma=1.5,
-    delta=0.001,
-    epsilon=0.001
-):
-    """
-    Procesa las primeras max_rows de df, detectando tanto soportes como resistencias.
-    """
-    df_chunk = df.iloc[:max_rows].copy()
-    
-    # Detectamos tanto picos como valles
-    peaks_list = detect_peaks_in_close(df_chunk, prominence=prominence, distance=distance)
-    valleys_list = detect_valleys_in_close(df_chunk, prominence=prominence, distance=distance)
-    
-    # Combinamos ambas listas y las ordenamos por índice
-    all_points = peaks_list + valleys_list
-    all_points.sort(key=lambda x: x[0])  # Ordenar por índice
-    
-    current_index = max_rows - 1
-    
-    # Procesamos clusters para resistencias y soportes
-    clusters = cluster_all_points_dynamic(all_points, df_chunk, pips_range=pips_range, 
-                                         reaction_window=reaction_window, current_index=current_index, 
-                                         K_age=K_age, T_recency=T_recency, bonus_factor=bonus_factor, 
-                                         role_change_bonus=role_change_bonus, gamma=gamma, delta=delta, epsilon=epsilon)
-    
-    # Convertimos a DataFrames
-    df_points = pd.DataFrame(all_points, columns=['idx', 'price', 'prominence', 'type']).sort_values('idx').reset_index(drop=True)
-    df_clusters = pd.DataFrame(clusters).reset_index(drop=True)
-    
-    return df_points, df_clusters
-
 def calculate_progressive_support_resistance(
     df,
     initial_window=5000,
@@ -418,19 +294,18 @@ def calculate_progressive_support_resistance(
     distance=10,
     pips_range=0.001,
     reaction_window=50,
-    bonus_factor=0.1,
-    role_change_bonus=1.5,
-    gamma=5,
-    delta=5,
-    epsilon=0.5,
-    merge_threshold=0.0002
+    merge_threshold=0.0002,
+    use_hl = True,
+    add_relevant_levels=True,  # Nuevo parámetro para activar la funcionalidad
+    n_closest=5,                # Número de niveles cercanos en precio a considerar
+    n_recent=5   
 ):
     """
     Calcula soportes y resistencias progresivamente usando una ventana deslizante,
     manteniendo todos los niveles activos en el historial.
     """
     # Configuración inicial y manejo temporal
-    FAR_FUTURE_DATE = pd.Timestamp('2099-12-31 23:59:59')
+    FAR_FUTURE_DATE = pd.Timestamp('2099-12-31 23:59:59', tz='US/Eastern')
     
     df_working = df.copy()
     
@@ -478,11 +353,21 @@ def calculate_progressive_support_resistance(
                 slice_time_reference = None
 
         # Llamar a las funciones modificadas pasando la referencia temporal
-        peaks = detect_peaks_in_close(current_slice, prominence=prominence, distance=distance, time_reference=slice_time_reference)
-        valleys = detect_valleys_in_close(current_slice, prominence=prominence, distance=distance, time_reference=slice_time_reference)
+        peaks_close = detect_peaks_in_close(current_slice, prominence=prominence, distance=distance, time_reference=slice_time_reference)
+        valleys_close = detect_valleys_in_close(current_slice, prominence=prominence, distance=distance, time_reference=slice_time_reference)
+        
+        # Detectar puntos adicionales usando high/low si está habilitado
+        if use_hl:
+            peaks_high = detect_peaks_in_high(current_slice, prominence=prominence, distance=distance, time_reference=slice_time_reference)
+            valleys_low = detect_valleys_in_low(current_slice, prominence=prominence, distance=distance, time_reference=slice_time_reference)
+            
+            # Combinar todos los puntos
+            all_points = peaks_close + valleys_close + peaks_high + valleys_low
+        else:
+            # Solo usar los puntos basados en close
+            all_points = peaks_close + valleys_close
 
-        # Combinar y ordenar los puntos
-        all_points = peaks + valleys
+
         all_points.sort(key=lambda x: x[0])
         # Ajustar el índice pero mantener el timestamp
         all_points = [(idx + start_idx, price, prom, type_, timestamp) for idx, price, prom, type_, timestamp in all_points]
@@ -494,9 +379,7 @@ def calculate_progressive_support_resistance(
             # Clusterizar puntos
             local_clusters = cluster_all_points_dynamic(
                 all_points, df_working, pips_range=pips_range, 
-                reaction_window=reaction_window, current_index=actual_end-1,
-                bonus_factor=bonus_factor, role_change_bonus=role_change_bonus,
-                gamma=gamma, delta=delta, epsilon=epsilon
+                reaction_window=reaction_window, current_index=actual_end-1
             )
             
             # Niveles actualizados para este ciclo
@@ -590,45 +473,47 @@ def calculate_progressive_support_resistance(
                         current_levels[matched_id] = existing
                         updated_in_cycle.add(matched_id)
                             
-            else:
-                # Nuevo nivel - crear registro desde cero
-                origin_idx = new_cluster['max_idx']
-                # Verifica que el índice esté dentro del rango válido
-                if 0 <= origin_idx < len(time_reference):
-                    origin_date = time_reference[origin_idx]
-                    
-                    # Asegúrate de que last_touch_dt refleje la fecha del último toque real
-                    last_touch_idx = new_cluster['max_idx']
-                    last_touch_dt = time_reference[last_touch_idx] if 0 <= last_touch_idx < len(time_reference) else current_timestamp
                 else:
-                    # Usar una fecha por defecto o la actual si el índice está fuera de rango
-                    origin_date = current_timestamp
-                    last_touch_dt = current_timestamp
-                
-                new_level = {
-                    'id': next_id,
-                    'price': new_cluster['cluster_center'],
-                    'touch_count': new_cluster['touch_count'],
-                    'revalidation_count': new_cluster['revalidation_count'],
-                    'duration': new_cluster['duration'],
-                    'prominence_mean': new_cluster['prominence_mean'],
-                    'reaction_magnitude': new_cluster['reaction_magnitude'],
-                    'role_changes': new_cluster.get('role_changes', 0),
-                    'min_idx': new_cluster['min_idx'],
-                    'max_idx': new_cluster['max_idx'],
-                    'origin_date': origin_date,
-                    'origin_idx': origin_idx,
-                    'type': 'Soporte' if new_cluster['predominant_type'] == 'S' else 'Resistencia',
-                    'valid_from_dt': current_timestamp,
-                    'valid_to_dt': FAR_FUTURE_DATE,
-                    'last_update_dt': current_timestamp,
-                    'last_touch_dt': new_cluster.get('last_touch_timestamp', current_timestamp),  # Usamos el timestamp del último toque
-                    'is_current': True
-                }
-                
-                current_levels[next_id] = new_level
-                updated_in_cycle.add(next_id)
-                next_id += 1
+                    debug_specific_level(new_cluster['cluster_center'], new_cluster, None, "NUEVO NIVEL ADICIONADO")
+                    # Nuevo nivel - crear registro desde cero
+                    origin_idx = new_cluster['max_idx']
+                    # Verifica que el índice esté dentro del rango válido
+                    if 0 <= origin_idx < len(time_reference):
+                        origin_date = time_reference[origin_idx]
+                        
+                        # Asegúrate de que last_touch_dt refleje la fecha del último toque real
+                        last_touch_idx = new_cluster['max_idx']
+                        last_touch_dt = time_reference[last_touch_idx] if 0 <= last_touch_idx < len(time_reference) else current_timestamp
+                    else:
+                        # Usar una fecha por defecto o la actual si el índice está fuera de rango
+                        origin_date = current_timestamp
+                        last_touch_dt = current_timestamp
+                    
+                    new_level = {
+                        'id': next_id,
+                        'price': new_cluster['cluster_center'],
+                        'touch_count': new_cluster['touch_count'],
+                        'revalidation_count': new_cluster['revalidation_count'],
+                        'duration': new_cluster['duration'],
+                        'prominence_mean': new_cluster['prominence_mean'],
+                        'reaction_magnitude': new_cluster['reaction_magnitude'],
+                        'role_changes': new_cluster.get('role_changes', 0),
+                        'min_idx': new_cluster['min_idx'],
+                        'max_idx': new_cluster['max_idx'],
+                        'origin_date': origin_date,
+                        'origin_idx': origin_idx,
+                        'type': 'Soporte' if new_cluster['predominant_type'] == 'S' else 'Resistencia',
+                        'valid_from_dt': current_timestamp,
+                        'valid_to_dt': FAR_FUTURE_DATE,
+                        'last_update_dt': current_timestamp,
+                        'last_touch_dt': new_cluster.get('last_touch_timestamp', current_timestamp),  # Usamos el timestamp del último toque
+                        'is_current': True
+                    }
+
+                    
+                    current_levels[next_id] = new_level
+                    updated_in_cycle.add(next_id)
+                    next_id += 1
             
             # Mantener los niveles antiguos que no fueron actualizados
             for level_id, existing_level in active_levels.items():
@@ -650,7 +535,28 @@ def calculate_progressive_support_resistance(
     
     # Convertir el historial a DataFrame
     history_df = pd.DataFrame(levels_history)
+
+    date_columns = ['valid_from_dt', 'valid_to_dt', 'last_update_dt', 'last_touch_dt', 'origin_date']
+    for col in date_columns:
+        if col in history_df.columns:
+            # Primero convertir a datetime
+            history_df[col] = pd.to_datetime(history_df[col], errors='coerce')
+            
+            # Verificar si ya tiene zona horaria
+            if history_df[col].dt.tz is None:
+                # Si no tiene zona horaria, asumimos que es UTC y convertimos a US/Eastern
+                history_df[col] = history_df[col].dt.tz_localize('UTC').dt.tz_convert('US/Eastern')
+            else:
+                # Si ya tiene zona horaria, solo convertir a US/Eastern
+                history_df[col] = history_df[col].dt.tz_convert('US/Eastern')
     
+    # Si se solicita añadir niveles relevantes
+    if add_relevant_levels:
+        print("Calculando niveles relevantes para cada vela...")
+        df_with_levels = add_relevant_levels_to_df(df_working, history_df, 2, 6)
+        return history_df, df_with_levels
+    
+
     return history_df
 
 # Añade esta función para depurar específicamente el nivel 1.3022
@@ -676,4 +582,345 @@ def debug_specific_level(level_price, new_cluster, matched_level=None, operation
         if 'last_touch_timestamp' in new_cluster:
             print(f"  - Último toque: {new_cluster['last_touch_timestamp']}")
         print("-----------------------------------\n")
+
+def debug_reaction_magnitude(cluster_center, predominant_type, max_idx, df, reaction_window, prices=None):
+    """
+    Depura el cálculo de reaction_magnitude para un nivel específico.
+    """
+    TARGET_LEVEL = 1.438133
+    TOLERANCE = 0.0002
+    
+    if abs(cluster_center - TARGET_LEVEL) <= TOLERANCE:
+        print(f"\n--- DEBUG REACTION MAGNITUDE PARA NIVEL {cluster_center:.6f} ---")
+        print(f"Tipo predominante: {predominant_type}")
+        print(f"Índice máximo: {max_idx}")
+        
+        # Verificar si hay datos futuros disponibles
+        start = max_idx + 1
+        end = min(start + reaction_window, len(df))
+        
+        print(f"Ventana de reacción: {start} a {end}")
+        print(f"¿Hay datos futuros? {'No' if start >= len(df) else 'Sí'}")
+        
+        if start < len(df):
+            window_prices = df.iloc[start:end]['close'].values
+            print(f"Precios futuros: {window_prices[:5]}{'...' if len(window_prices) > 5 else ''}")
+            print(f"Min futuro: {np.min(window_prices):.6f}, Max futuro: {np.max(window_prices):.6f}")
+            
+            # Si tenemos el precio medio del nivel
+            if prices is not None:
+                mean_price = float(np.mean(prices))
+                print(f"Precio medio del nivel: {mean_price:.6f}")
+                
+                if predominant_type == 'R':
+                    reaction = mean_price - np.min(window_prices)
+                    print(f"Cálculo (R): {mean_price:.6f} - {np.min(window_prices):.6f} = {reaction:.6f}")
+                else:
+                    reaction = np.max(window_prices) - mean_price
+                    print(f"Cálculo (S): {np.max(window_prices):.6f} - {mean_price:.6f} = {reaction:.6f}")
+                
+                print(f"Magnitud final (max con 0): {max(reaction, 0):.6f}")
+        
+        print("-----------------------------------\n")
+
+
+
+def add_relevant_levels_to_df(df, history_df, n_closest=5, n_recent=5):
+    """
+    Añade una columna con los niveles más relevantes para cada fila del dataframe.
+
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        DataFrame con datos OHLC
+    history_df : pandas.DataFrame
+        DataFrame con el historial de niveles de soporte y resistencia
+    n_closest : int, default 5
+        Número de niveles más cercanos en precio a incluir
+    n_recent : int, default 5
+        Número de niveles más recientes a incluir
+
+    Returns:
+    --------
+    pandas.DataFrame
+        DataFrame original con columna adicional 'relevant_levels'
+    """
+    import json
+    import pandas as pd
+
+    # Crear una copia para no modificar el original
+    df_result = df.copy()
+
+    # Determinar la columna de tiempo
+    time_col = None
+    if 'datetime' in df.columns:
+        time_col = 'datetime'
+    elif 'timestamp' in df.columns:
+        time_col = 'timestamp'
+
+    # Si no hay columna de tiempo pero hay índice de tiempo, extraerlo
+    if time_col is None and isinstance(df.index, pd.DatetimeIndex):
+        df_result['datetime'] = df.index
+        time_col = 'datetime'
+
+    if time_col is None:
+        raise ValueError("No se encontró información temporal en el dataframe")
+
+    # Preparar la columna de niveles relevantes
+    relevant_levels_list = []
+    total_rows = len(df_result)
+
+    print(f"Procesando {total_rows} filas...")
+
+    # Procesar por bloques para mejorar el rendimiento
+    chunk_size = 1000
+    for start_idx in range(0, total_rows, chunk_size):
+        end_idx = min(start_idx + chunk_size, total_rows)
+        print(f"Procesando filas {start_idx} a {end_idx}...")
+
+        for i in range(start_idx, end_idx):
+            row = df_result.iloc[i]
+
+            # Obtener fecha y precio
+            current_dt = row[time_col]
+            price = row['close']
+
+
+            # Filtrar niveles válidos para esta fecha
+            valid_levels = history_df[
+                (history_df['valid_from_dt'] <= current_dt) & 
+                (history_df['valid_to_dt'] >= current_dt)
+            ]
+
+            if valid_levels.empty:
+                # No hay niveles válidos para esta fecha
+                relevant_levels_list.append(json.dumps({
+                    "closest": [],
+                    "recent": []
+                }))
+                continue
+
+            # Calcular distancia al precio actual
+            valid_levels = valid_levels.copy()  # Para evitar SettingWithCopyWarning
+            valid_levels['price_distance'] = abs(valid_levels['price'] - price)
+
+            # Calcular velas transcurridas desde el último toque en minutos
+            valid_levels['bars_since_touch'] = (current_dt - valid_levels['last_touch_dt']).dt.total_seconds() / (60 * 5)
+
+            # Calcular un score combinado para cada nivel (normalizado entre 0-100)
+            # Pesos para cada componente - ajustar según necesidad
+            w_touch = 0.3
+            w_reaction = 0.3
+            w_prominence = 0.2
+            w_duration = 0.2
+
+            # Normalizar los componentes (para que estén en rango similar)
+            max_touch = max(valid_levels['touch_count'].max(), 1)
+            max_reaction = max(valid_levels['reaction_magnitude'].max(), 0.001)
+            max_prominence = max(valid_levels['prominence_mean'].max(), 0.001)
+            max_duration = max(valid_levels['duration'].max(), 1)
+
+            valid_levels['importance_score'] = (
+                w_touch * (valid_levels['touch_count'] / max_touch) * 100 +
+                w_reaction * (valid_levels['reaction_magnitude'] / max_reaction) * 100 +
+                w_prominence * (valid_levels['prominence_mean'] / max_prominence) * 100 +
+                w_duration * (valid_levels['duration'] / max_duration) * 100
+            )
+
+            # Obtener los niveles más cercanos en precio
+            closest_levels = valid_levels.sort_values('price_distance').head(n_closest)
+
+            # Obtener los niveles más recientes (ordenados por last_touch_dt descendente)
+            recent_levels = valid_levels.sort_values('last_touch_dt', ascending=False).head(n_recent)
+
+            # Función auxiliar para crear un diccionario con todos los atributos requeridos
+            def level_to_dict(level):
+                return {
+                    'id': int(level['id']),
+                    'price': float(level['price']),
+                    'type': level['type'],
+                    'touch_count': int(level['touch_count']),
+                    'distance': float(level['price_distance']),
+                    'bars_since_touch': int(round(level['bars_since_touch'])),
+                    'last_touch': level['last_touch_dt'].strftime('%Y-%m-%d %H:%M:%S'),
+                    'reaction_magnitude': float(level['reaction_magnitude']),
+                    'prominence': float(level['prominence_mean']),
+                    'duration': int(level['duration']),
+                    'importance_score': float(level['importance_score'])
+                }
+
+            # Convertir a formato serializable: Se permite que un mismo nivel aparezca en ambos grupos
+            closest_list = [level_to_dict(level) for _, level in closest_levels.iterrows()]
+            # En recent se conservan todos los niveles, incluso si se repite el mismo nivel varias veces
+            recent_list = [level_to_dict(level) for _, level in recent_levels.iterrows()]
+
+            # Crear el objeto JSON con ambas listas
+            relevant_json = {
+                "closest": closest_list,
+                "recent": recent_list
+            }
+
+            # Añadir al listado
+            relevant_levels_list.append(json.dumps(relevant_json))
+
+    # Añadir la columna al DataFrame
+    df_result['relevant_levels'] = relevant_levels_list
+
+    print("Procesamiento completado.")
+    return df_result
+
+
+def calcular_metricas_fila(row):
+    """
+    Calcula las métricas definidas a partir de la información en la columna 'relevant_levels'
+    para cada fila del DataFrame.
+    """
+    # Extraer el precio actual y el datetime de la fila
+    precio_actual = row['close']
+    dt_actual = row['datetime']  # Se asume que ya es un objeto datetime
+
+    # Convertir la cadena JSON de la columna 'relevant_levels' en un diccionario
+    try:
+        niveles_dict = json.loads(row['relevant_levels'])
+    except Exception as e:
+        # En caso de error en el parseo, se retorna una serie con valores nulos
+        return pd.Series({
+            "direccion_ultimo": None,
+            "fuerza_ultimo": None,
+            "comportamiento": None,
+            "posicion_precio_recent": None,
+            "pips_desde_ultimo": None,
+            "minutos_desde_ultimo_touch": None,
+            "tendencia_recent": None,
+            "pips_cercano": None,
+            "minutos_desde_cercano": None,
+            "nivel_en_recent": None,
+            "posicion_nivel_cercano": None,
+            "fuerza_nivel_cercano": None,
+            "pips_nivel_arriba": None,
+            "pips_nivel_abajo": None
+        })
+
+    recent_levels = niveles_dict.get("recent", [])
+    closest_levels = niveles_dict.get("closest", [])
+
+    # Si no existen los niveles necesarios, retorna valores nulos
+    if not recent_levels or not closest_levels:
+        return pd.Series({
+            "direccion_ultimo": None,
+            "fuerza_ultimo": None,
+            "comportamiento": None,
+            "posicion_precio_recent": None,
+            "pips_desde_ultimo": None,
+            "minutos_desde_ultimo_touch": None,
+            "tendencia_recent": None,
+            "pips_cercano": None,
+            "minutos_desde_cercano": None,
+            "nivel_en_recent": None,
+            "posicion_nivel_cercano": None,
+            "fuerza_nivel_cercano": None,
+            "pips_nivel_arriba": None,
+            "pips_nivel_abajo": None
+        })
+
+    # Convertir el campo 'last_touch' de cada nivel a datetime
+    for nivel in recent_levels:
+        nivel["last_touch_dt"] = datetime.datetime.strptime(nivel["last_touch"], "%Y-%m-%d %H:%M:%S")
+    for nivel in closest_levels:
+        nivel["last_touch_dt"] = datetime.datetime.strptime(nivel["last_touch"], "%Y-%m-%d %H:%M:%S")
+
+    # 1. Variables usando los niveles 'recent'
+    # Ordenamos por 'last_touch_dt' para obtener el nivel más reciente
+    recent_ordenados = sorted(recent_levels, key=lambda x: x["last_touch_dt"])
+    ultimo_recent = recent_ordenados[-1]
+
+    # 1.1 Dirección tras el último toque:
+    direccion = "hacia arriba" if precio_actual > ultimo_recent["price"] else "hacia abajo"
+
+    # 1.2 Fuerza del último nivel (puedes combinar varias métricas o elegir una)
+    fuerza_ultimo = ultimo_recent["importance_score"]
+
+    # 1.3 Rebote vs. Ruptura: utilizando el último y el penúltimo nivel
+    if len(recent_ordenados) >= 2:
+        penultimo_recent = recent_ordenados[-2]
+        if min(ultimo_recent["price"], penultimo_recent["price"]) < precio_actual < max(ultimo_recent["price"], penultimo_recent["price"]):
+            comportamiento = "rebote"
+        elif precio_actual > max(ultimo_recent["price"], penultimo_recent["price"]):
+            comportamiento = "ruptura al alza"
+        elif precio_actual < min(ultimo_recent["price"], penultimo_recent["price"]):
+            comportamiento = "ruptura a la baja"
+        else:
+            comportamiento = "indeterminado"
+    else:
+        comportamiento = "indeterminado"
+
+    # 1.4 Posición del precio respecto a los niveles recientes
+    precios_recent = sorted([n["price"] for n in recent_levels])
+    # Si la lista está ordenada de menor a mayor, la posición es:
+    posicion = sum([1 for p in precios_recent if precio_actual > p]) + 1
+
+    # 1.5 Distancia en pips al último nivel
+    diff_ultimo = abs(precio_actual - ultimo_recent["price"])
+    pips_ultimo = diff_ultimo / 0.0001
+
+    # 1.6 Usar bars_since_touch directamente que ya está calculado
+    minutos_ultimo = ultimo_recent["bars_since_touch"]
+
+    # 1.7 Tendencia implícita en recent_levels: 
+    precios_por_fecha = [n["price"] for n in recent_ordenados]
+    if all(earlier >= later for earlier, later in zip(precios_por_fecha, precios_por_fecha[1:])):
+        tendencia = "bajista"
+    elif all(earlier <= later for earlier, later in zip(precios_por_fecha, precios_por_fecha[1:])):
+        tendencia = "alcista"
+    else:
+        tendencia = "lateral"
+
+    # 2. Variables usando los niveles 'closest'
+    # 2.1 Seleccionar el nivel con la menor diferencia (distance)
+    nivel_cercano = min(closest_levels, key=lambda x: x["distance"])
+    pips_cercano = nivel_cercano["distance"] / 0.0001
+    
+    # 2.2 Usar bars_since_touch directamente que ya está calculado
+    minutos_cercano = nivel_cercano["bars_since_touch"]
+
+    # 2.3 Verificar si el nivel cercano aparece en recent_levels
+    ids_recent = {n["id"] for n in recent_levels}
+    en_recent = nivel_cercano["id"] in ids_recent
+
+    # 2.4 Posición del nivel cercano respecto al precio
+    posicion_nivel = "por encima" if nivel_cercano["price"] > precio_actual else "por debajo"
+
+    # 2.5 Fuerza del nivel cercano (usando, por ejemplo, importance_score)
+    fuerza_cercano = nivel_cercano["importance_score"]
+
+    # 2.6 Nivel más cercano por encima del precio
+    niveles_arriba = [n for n in closest_levels if n["price"] > precio_actual]
+    pips_arriba = None
+    if niveles_arriba:
+        nivel_arriba = min(niveles_arriba, key=lambda x: x["price"] - precio_actual)
+        pips_arriba = (nivel_arriba["price"] - precio_actual) / 0.0001
+
+    # 2.7 Nivel más cercano por debajo del precio
+    niveles_abajo = [n for n in closest_levels if n["price"] < precio_actual]
+    pips_abajo = None
+    if niveles_abajo:
+        nivel_abajo = max(niveles_abajo, key=lambda x: x["price"])
+        pips_abajo = (precio_actual - nivel_abajo["price"]) / 0.0001
+
+    return pd.Series({
+        "direccion_ultimo": direccion,
+        "fuerza_ultimo": fuerza_ultimo,
+        "comportamiento": comportamiento,
+        "posicion_precio_recent": posicion,
+        "pips_desde_ultimo": pips_ultimo,
+        "minutos_desde_ultimo_touch": minutos_ultimo,
+        "tendencia_recent": tendencia,
+        "pips_cercano": pips_cercano,
+        "minutos_desde_cercano": minutos_cercano,
+        "nivel_en_recent": en_recent,
+        "posicion_nivel_cercano": posicion_nivel,
+        "fuerza_nivel_cercano": fuerza_cercano,
+        "pips_nivel_arriba": pips_arriba,
+        "pips_nivel_abajo": pips_abajo
+    })
 

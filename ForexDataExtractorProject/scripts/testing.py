@@ -22,7 +22,7 @@ now = datetime.now()
 
 #create list of desired data
 
-pair = 'EUR/USD'
+pair = 'GBP/USD'
 contract1 = fxPair(pair)
 
 pair = 'USD/JPY'
@@ -31,7 +31,7 @@ contract2 = fxPair(pair)
 contracts = {
     contract1:[
         {
-         'candlesize':'1 min',
+         'candlesize':'5 mins',
          'duration':'1 D'
         }
     ]
