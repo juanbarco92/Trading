@@ -22,7 +22,7 @@ now = datetime.now()
 
 #create list of desired data
 
-pair = 'GBP/USD'
+pair = 'EUR/USD'
 contract1 = fxPair(pair)
 
 pair = 'USD/JPY'

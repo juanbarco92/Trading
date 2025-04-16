@@ -384,9 +384,18 @@ def evaluar_escenarios_trading(row, pips_objetivo, pips_stop):
             pips = round((precios_stop[velas_stop] - precio_entrada) * 10000 * multiplicador, 1)
             return "STOP_ALCANZADO", velas_stop + 1, pips
         else:
-            pips = round((cierres_futuros[-1] - precio_entrada) * 10000 * multiplicador, 1)
-            return "SIN_ALCANCE", len(cierres_futuros), pips
-    
+            # Si no hay valores futuros válidos (todos NaN), retornar SIN_ALCANCE con 0 pips
+            if np.isnan(cierres_futuros).all():
+                 return "SIN_ALCANCE", len(cierres_futuros), 0.0
+            # Si hay valores futuros, usar el último cierre válido
+            last_valid_index = np.where(~np.isnan(cierres_futuros))[0]
+            if len(last_valid_index) > 0:
+                last_idx = last_valid_index[-1]
+                pips = round((cierres_futuros[last_idx] - precio_entrada) * 10000 * multiplicador, 1)
+                return "SIN_ALCANCE", last_idx + 1, pips
+            else: # Caso raro donde todos los futuros son NaN
+                return "SIN_ALCANCE", len(cierres_futuros), 0.0
+
     # Evaluar escenario de compra
     compra_resultado = calcular_resultado(
         velas_objetivo_compra, velas_stop_compra,
@@ -407,6 +416,94 @@ def evaluar_escenarios_trading(row, pips_objetivo, pips_stop):
         'compra_resultado', 'compra_velas', 'compra_pips',
         'venta_resultado', 'venta_velas', 'venta_pips'
     ])
+
+
+def generate_target_variable(df, pips_objetivo=10, pips_stop=3, future_periods=24):
+    """Generates future values and evaluates trading scenarios to create target."""
+    print(f"Generating target variable (pips_objetivo={pips_objetivo}, pips_stop={pips_stop}, future_periods={future_periods})...")
+    df_copy = df.copy() # Avoid modifying original df passed to transformer
+
+    required_cols = ['high', 'low', 'close']
+    if not all(col in df_copy.columns for col in required_cols):
+        raise ValueError(f"Missing required columns for target generation: {required_cols}")
+
+    # Generate future value columns using sliding window
+    if future_periods > 0:
+        from numpy.lib.stride_tricks import sliding_window_view
+        padding = np.full((future_periods - 1), np.nan) # Padding for the end
+
+        for col in ['high', 'low', 'close']:
+            future_col_name = f'future_{col}_values'
+            # Get values shifted forward (current row looks into the future)
+            # shifted_values = df_copy[col].shift(-future_periods).values # Not needed with sliding_window
+            # Create sliding windows of the *original* future values
+            # We need the next 'future_periods' values for *each* row
+            values_for_sliding = df_copy[col].values
+            if len(values_for_sliding) >= future_periods:
+                 # Window view creates (len - N + 1, N) shape
+                 # We need windows starting from index 1 up to index len - N + 1
+                 # to represent the future relative to index 0 up to len - N
+                 windows = sliding_window_view(values_for_sliding[1:], window_shape=future_periods)
+                 # Pad appropriately at the beginning (for the first row) and end
+                 padding_array_start = np.full((1, future_periods), np.nan)
+                 padding_array_end = np.full((future_periods -1 , future_periods), np.nan)
+                 # Combine: start padding, windows, end padding
+                 future_values_array = np.vstack([padding_array_start, windows, padding_array_end])
+                 # Ensure the final array has the same length as the original DataFrame
+                 if len(future_values_array) > len(df_copy):
+                     future_values_array = future_values_array[:len(df_copy)]
+                 elif len(future_values_array) < len(df_copy):
+                      # This case should ideally not happen with correct padding, but handle defensively
+                      padding_needed = len(df_copy) - len(future_values_array)
+                      extra_padding = np.full((padding_needed, future_periods), np.nan)
+                      future_values_array = np.vstack([future_values_array, extra_padding])
+
+                 df_copy[future_col_name] = list(future_values_array)
+            else:
+                 # Handle cases with insufficient data
+                 df_copy[future_col_name] = [np.full(future_periods, np.nan)] * len(df_copy)
+
+
+    # Evaluate trading scenarios if future columns were created
+    if f'future_high_values' in df_copy.columns:
+        print("Evaluating trading scenarios...")
+        # Ensure future columns exist before applying
+        future_cols_exist = all(f'future_{c}_values' in df_copy.columns for c in ['high', 'low', 'close'])
+        if future_cols_exist:
+            trade_results = df_copy.apply(
+                lambda row: evaluar_escenarios_trading(row, pips_objetivo=pips_objetivo, pips_stop=pips_stop),
+                axis=1,
+                result_type='expand' # Return multiple columns
+            )
+            trade_results.columns = ['compra_resultado', 'compra_velas', 'compra_pips',
+                                     'venta_resultado', 'venta_velas', 'venta_pips']
+            df_copy = pd.concat([df_copy, trade_results], axis=1)
+
+            # Create multiclass target
+            df_copy["multiclass_target"] = np.where(
+                (df_copy['compra_resultado'] == 'OBJETIVO_ALCANZADO') & (df_copy['venta_resultado'] != 'OBJETIVO_ALCANZADO'),
+                'objetivo_compra_alcanzado',
+                np.where(
+                    (df_copy['compra_resultado'] != 'OBJETIVO_ALCANZADO') & (df_copy['venta_resultado'] == 'OBJETIVO_ALCANZADO'),
+                    'objetivo_venta_alcanzado',
+                    'no_objetivo_alcanzado'
+                )
+            )
+            # Handle cases where evaluation resulted in NaN (e.g., due to NaN future values)
+            df_copy['multiclass_target'] = df_copy['multiclass_target'].fillna('undefined')
+            print("Target variable 'multiclass_target' created.")
+        else:
+             print("Skipping trading scenario evaluation as future value columns are missing or incomplete.")
+             df_copy['multiclass_target'] = 'undefined' # Or handle as error
+
+    else:
+        print("Skipping trading scenario evaluation as future value columns were not generated.")
+        df_copy['multiclass_target'] = 'undefined' # Or handle as error
+
+    # Drop intermediate future value columns if desired (optional)
+    # df_copy = df_copy.drop(columns=[f'future_{col}_values' for col in ['high', 'low', 'close']], errors='ignore')
+
+    return df_copy
 
 
 def get_time_window(df, columns, window=5):
@@ -1293,9 +1390,10 @@ def round_number_pivot_engineering(df, close_col='close', high_col='high', low_c
     return df
 
 
-def create_candle_patterns(df, cluster_column='cluster', n_candles=4):
+def create_basic_patterns(df, cluster_column='cluster', n_candles=4):
     """
     Crea patrones concatenando los valores de cluster de las n_candles anteriores.
+    Esta función solo genera los patrones sin agruparlos.
     
     Args:
         df: DataFrame que contiene la columna de clusters
@@ -1303,7 +1401,7 @@ def create_candle_patterns(df, cluster_column='cluster', n_candles=4):
         n_candles: Número de velas anteriores a considerar
         
     Returns:
-        Series con los patrones de velas
+        Series con los patrones básicos de velas
     """
     # Generar las columnas desplazadas (lags)
     lag_cols = [df[cluster_column].shift(i) for i in range(1, n_candles+1)]
@@ -1319,10 +1417,115 @@ def create_candle_patterns(df, cluster_column='cluster', n_candles=4):
     for i in range(1, len(pattern_parts)):
         pattern_series = pattern_series + "_" + pattern_parts[i]
     
-    # Opcional: Reemplazar 'nan' con un valor especial
+    # Reemplazar 'nan' con un valor especial
     pattern_series = pattern_series.replace('nan_.*|.*_nan', 'incomplete_pattern', regex=True)
     
     return pattern_series
+
+def create_pattern_mapping(patterns, min_threshold=10, similarity_method='hamming'):
+    """
+    Crea un mapa para agrupar patrones poco frecuentes con patrones similares más frecuentes.
+    
+    Args:
+        patterns: Series con patrones para analizar frecuencias
+        min_threshold: Umbral mínimo de ocurrencias para mantener un patrón
+        similarity_method: Método para calcular similitud entre patrones ('hamming' o 'edit')
+        
+    Returns:
+        Dict con mapeo de patrones raros a sus patrones similares frecuentes
+    """
+    import Levenshtein
+    
+    # Contar la frecuencia de cada patrón
+    pattern_counts = patterns.value_counts()
+    
+    # Identificar patrones frecuentes (por encima del umbral)
+    frequent_patterns = pattern_counts[pattern_counts >= min_threshold].index.tolist()
+    
+    # Identificar patrones poco frecuentes (por debajo del umbral)
+    rare_patterns = pattern_counts[pattern_counts < min_threshold].index.tolist()
+    
+    # Si no hay ningún patrón común o no hay patrones raros, devolver un diccionario vacío
+    if not frequent_patterns or not rare_patterns:
+        return {}
+    
+    # Función para calcular la distancia entre patrones
+    def calculate_distance(pattern1, pattern2):
+        if pattern1 == 'incomplete_pattern' or pattern2 == 'incomplete_pattern':
+            return float('inf')  # No queremos emparejar patrones incompletos
+            
+        if similarity_method == 'edit':
+            # Distancia de edición (Levenshtein)
+            return Levenshtein.distance(pattern1, pattern2)
+        else:
+            # Distancia Hamming (patrones deben tener igual longitud)
+            distance = 0
+            parts1 = pattern1.split('_')
+            parts2 = pattern2.split('_')
+            
+            for i in range(min(len(parts1), len(parts2))):
+                if parts1[i] != parts2[i]:
+                    distance += 1
+                    
+            # Penalizar longitudes diferentes
+            distance += abs(len(parts1) - len(parts2))
+            return distance
+    
+    # Para cada patrón raro, encontrar el patrón frecuente más similar
+    pattern_mapping = {}
+    for rare in rare_patterns:
+        if rare == 'incomplete_pattern':
+            continue  # Mantener el patrón incompleto como está
+            
+        # Calcular la distancia a cada patrón frecuente
+        distances = [(frequent, calculate_distance(rare, frequent)) for frequent in frequent_patterns]
+        
+        # Encontrar el patrón frecuente con menor distancia
+        nearest_pattern, min_distance = min(distances, key=lambda x: x[1])
+        
+        # Solo asignar al patrón más cercano si la distancia es razonable
+        # (menos de la mitad de componentes diferentes)
+        max_acceptable_distance = len(rare.split('_')) / 2
+        
+        if min_distance <= max_acceptable_distance:
+            pattern_mapping[rare] = nearest_pattern
+        else:
+            pattern_mapping[rare] = 'other_pattern'  # Si no hay nada suficientemente cercano
+    
+    return pattern_mapping
+
+def apply_pattern_mapping(patterns, pattern_mapping):
+    """
+    Aplica un mapeo de patrones para reemplazar los patrones raros.
+    
+    Args:
+        patterns: Series con patrones
+        pattern_mapping: Dict con el mapeo de patrones raros a frecuentes
+        
+    Returns:
+        Series con los patrones mapeados
+    """
+    return patterns.replace(pattern_mapping)
+
+def create_candle_patterns(df, cluster_column='cluster', n_candles=4, min_threshold=10, similarity_method='hamming'):
+    """
+    Función de compatibilidad para mantener la interfaz anterior.
+    Crea patrones concatenando los valores de cluster y agrupa los patrones raros.
+    
+    Args:
+        df: DataFrame que contiene la columna de clusters
+        cluster_column: Nombre de la columna que contiene los clusters de velas
+        n_candles: Número de velas anteriores a considerar
+        min_threshold: Umbral mínimo de ocurrencias para mantener un patrón
+        similarity_method: Método para calcular similitud entre patrones
+        
+    Returns:
+        Series con los patrones de velas
+    """
+    patterns = create_basic_patterns(df, cluster_column, n_candles)
+    pattern_mapping = create_pattern_mapping(patterns, min_threshold, similarity_method)
+    return apply_pattern_mapping(patterns, pattern_mapping)
+
 
 
 
@@ -1973,3 +2176,6 @@ def fractal_engineering(df, window_sizes=[5], lookback=10, high_col='high', low_
     
     # No eliminamos filas con NaN, siguiendo la política establecida
     return df
+
+
+
