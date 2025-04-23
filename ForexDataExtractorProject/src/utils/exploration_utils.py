@@ -1,24 +1,76 @@
 import numpy as np
 import pandas as pd
+import pytz
 from numpy.lib.stride_tricks import sliding_window_view
 from itertools import combinations
+import os
 
+def read_csv_files(folder_path):
+    # List all CSV files in the folder
+    all_files = os.listdir(folder_path)
+    csv_files = [os.path.join(folder_path, file) for file in all_files if file.endswith('.csv')]
+    
+    # Read and concatenate all CSV files into a single DataFrame
+    combined_df = pd.concat((pd.read_csv(f) for f in csv_files), ignore_index=True)
+    
+    return combined_df
 
 def preprocess_data(df):
-    # Convert the 'date' column to datetime, considering the format and timezone
-    df['datetime'] = pd.to_datetime(df['date'], format='%Y%m%d %H:%M:%S %Z')
-    
-    # Extract date components
+    """
+    Preprocesses the input DataFrame:
+    - Parses the 'date' column including timezone information (e.g., 'YYYYMMDD HH:MM:SS TZ').
+    - Converts the datetime to UTC for consistency with realtime_processor.
+    - Extracts date/time components based on UTC.
+    - Sorts the DataFrame by UTC datetime.
+    """
+    print("Starting preprocessing...")
+    if 'date' not in df.columns:
+        raise ValueError("La columna 'date' no existe en el DataFrame.")
+
+    # 1. Parse the 'date' column, interpreting the original timezone string (%Z)
+    try:
+        # errors='coerce' pondrá NaT si falla el parseo. utc=False respeta la zona original.
+        df['datetime_localized'] = pd.to_datetime(df['date'], format='%Y%m%d %H:%M:%S %Z', errors='coerce', utc=False)
+
+        nat_count = df['datetime_localized'].isna().sum()
+        if nat_count > 0:
+            print(f"Warning: {nat_count} filas fallaron al parsear la fecha/hora inicial con zona horaria. Revisa el formato de la columna 'date'.")
+            # Considera eliminar estas filas si no se pueden procesar:
+            # df.dropna(subset=['datetime_localized'], inplace=True)
+
+    except Exception as e:
+         raise ValueError(f"Error durante el parseo inicial de fecha/hora: {e}")
+
+    # 2. Convert the localized datetime column to UTC
+    print("Convirtiendo fechas/horas parseadas a UTC...")
+    # Si el parseo fue exitoso, dt.tz no será None. Si falló (NaT), tz_convert no hará nada.
+    df['datetime'] = df['datetime_localized'].dt.tz_convert('UTC')
+
+    # Verificar si la conversión a UTC funcionó
+    if not pd.api.types.is_datetime64_any_dtype(df['datetime']) or df['datetime'].dt.tz != pytz.UTC:
+         if df['datetime'].isna().any():
+              print("Warning: Valores NaT presentes después del intento de conversión a UTC. El parseo original pudo haber fallado.")
+         elif not df['datetime_localized'].isna().all(): # Solo advertir si había datos válidos para convertir
+             print("Warning: La columna 'datetime' no está en el formato UTC esperado después de la conversión.")
+
+    # 3. Extract date components (now based on UTC)
+    print("Extrayendo componentes de fecha/hora desde UTC...")
     df['Year'] = df['datetime'].dt.year
-    df['Month'] = df['datetime'].dt.strftime('%Y%m')
+    df['Month'] = df['datetime'].dt.strftime('%Y%m') # Formato YYYYMM
     df['Day'] = df['datetime'].dt.day
-    df['Date'] = df['datetime'].dt.strftime('%Y%m%d')  # Format as 'YYYYMMDD'
-    df['Hour'] = df['datetime'].dt.hour
-    df['Minute'] = df['datetime'].dt.minute
-    
-    # Sort data by datetime
+    df['Date'] = df['datetime'].dt.strftime('%Y%m%d') # Formato YYYYMMDD
+    df['Hour'] = df['datetime'].dt.hour # Hora UTC (0-23)
+    df['Minute'] = df['datetime'].dt.minute # Minuto UTC (0-59)
+    df['DayOfWeek'] = df['datetime'].dt.dayofweek # Descomentar si se necesita
+
+    # 4. Sort data by UTC datetime
+    print("Ordenando DataFrame por fecha/hora UTC...")
     df = df.sort_values('datetime').reset_index(drop=True)
-    
+
+    # 5. Opcional: Eliminar columnas intermedias
+    df = df.drop(columns=['date', 'datetime_localized'], errors='ignore')
+
+    print("Preprocesamiento completado. DataFrame ordenado por fecha/hora UTC.")
     return df
 
 
@@ -1422,7 +1474,7 @@ def create_basic_patterns(df, cluster_column='cluster', n_candles=4):
     
     return pattern_series
 
-def create_pattern_mapping(patterns, min_threshold=10, similarity_method='hamming'):
+def create_pattern_mapping(patterns, min_threshold=10):
     """
     Crea un mapa para agrupar patrones poco frecuentes con patrones similares más frecuentes.
     
@@ -1434,7 +1486,6 @@ def create_pattern_mapping(patterns, min_threshold=10, similarity_method='hammin
     Returns:
         Dict con mapeo de patrones raros a sus patrones similares frecuentes
     """
-    import Levenshtein
     
     # Contar la frecuencia de cada patrón
     pattern_counts = patterns.value_counts()
@@ -1454,22 +1505,18 @@ def create_pattern_mapping(patterns, min_threshold=10, similarity_method='hammin
         if pattern1 == 'incomplete_pattern' or pattern2 == 'incomplete_pattern':
             return float('inf')  # No queremos emparejar patrones incompletos
             
-        if similarity_method == 'edit':
-            # Distancia de edición (Levenshtein)
-            return Levenshtein.distance(pattern1, pattern2)
-        else:
-            # Distancia Hamming (patrones deben tener igual longitud)
-            distance = 0
-            parts1 = pattern1.split('_')
-            parts2 = pattern2.split('_')
-            
-            for i in range(min(len(parts1), len(parts2))):
-                if parts1[i] != parts2[i]:
-                    distance += 1
-                    
-            # Penalizar longitudes diferentes
-            distance += abs(len(parts1) - len(parts2))
-            return distance
+        # Distancia Hamming (patrones deben tener igual longitud)
+        distance = 0
+        parts1 = pattern1.split('_')
+        parts2 = pattern2.split('_')
+        
+        for i in range(min(len(parts1), len(parts2))):
+            if parts1[i] != parts2[i]:
+                distance += 1
+                
+        # Penalizar longitudes diferentes
+        distance += abs(len(parts1) - len(parts2))
+        return distance
     
     # Para cada patrón raro, encontrar el patrón frecuente más similar
     pattern_mapping = {}
@@ -1507,7 +1554,7 @@ def apply_pattern_mapping(patterns, pattern_mapping):
     """
     return patterns.replace(pattern_mapping)
 
-def create_candle_patterns(df, cluster_column='cluster', n_candles=4, min_threshold=10, similarity_method='hamming'):
+def create_candle_patterns(df, cluster_column='cluster', n_candles=4, min_threshold=10):
     """
     Función de compatibilidad para mantener la interfaz anterior.
     Crea patrones concatenando los valores de cluster y agrupa los patrones raros.
@@ -1523,7 +1570,7 @@ def create_candle_patterns(df, cluster_column='cluster', n_candles=4, min_thresh
         Series con los patrones de velas
     """
     patterns = create_basic_patterns(df, cluster_column, n_candles)
-    pattern_mapping = create_pattern_mapping(patterns, min_threshold, similarity_method)
+    pattern_mapping = create_pattern_mapping(patterns, min_threshold)
     return apply_pattern_mapping(patterns, pattern_mapping)
 
 
@@ -2178,4 +2225,316 @@ def fractal_engineering(df, window_sizes=[5], lookback=10, high_col='high', low_
     return df
 
 
+# 4. Technical Indicators Feature Engineering
+def apply_technical_indicators(df):
+    """Applies various technical indicators."""
+    print(">>> Starting step: apply_technical_indicators") # DEBUG
+    df_out = df.copy() # Work on a copy
+    df_out = sma_engineering_from_close(df_out, [10, 40, 100])
+    df_out = feature_engineering_rsi(df_out)
+    df_out = bollinger_bands_engineering(df_out, periods=[20, 50], std_devs=[2.0, 2.5])
+    df_out = macd_engineering(df_out, fast_periods=[12, 8], slow_periods=[26, 21], signal_periods=[9], lookback=5)
+    df_out = atr_engineering(df_out, periods=[14, 21], lookback=5)
+    #df_out = adx_engineering(df_out, periods=[14, 21], lookback=5)
+    df_out = stochastic_engineering(df_out, k_periods=[14, 21], d_periods=[3, 5], lookback=5, slow=True)
+    df_out = parabolic_sar_engineering(df_out)
+    df_out = round_number_pivot_engineering(df_out)
+    print("<<< Finished step: apply_technical_indicators") # DEBUG
+    return df_out
 
+
+def apply_candle_features(df, n_candles=6):
+    """Calculates basic candle features and vectorizes them."""
+    print(f">>> Starting step: apply_candle_features (n_candles={n_candles})") # DEBUG
+    df_out = df.copy() # Work on a copy
+    df_out = calcular_features_vela(df_out)
+    features_to_vectorize = ['body_size', 'upper_wick', 'lower_wick', 'total_range',
+                             'body_ratio', 'upper_wick_ratio', 'lower_wick_ratio']
+    features_to_vectorize = [f for f in features_to_vectorize if f in df_out.columns]
+    if features_to_vectorize:
+        df_out = create_candle_features_vector(df_out, feature_columns=features_to_vectorize, n_candles=n_candles)
+    else:
+        print("Warning: No candle features found to vectorize in apply_candle_features.")
+    print("<<< Finished step: apply_candle_features") # DEBUG
+    return df_out
+
+
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.impute import SimpleImputer
+from sklearn.cluster import KMeans
+
+class CandleClusterer(BaseEstimator, TransformerMixin):
+    def __init__(self, n_clusters=3, n_candles=5,
+                 min_pattern_threshold=10, # Nuevos parámetros
+                 random_state=42):
+        self.n_clusters = n_clusters
+        self.n_candles = n_candles
+        self.min_pattern_threshold = min_pattern_threshold # Método de similitud para mapeo
+        self.random_state = random_state
+        self.kmeans_ = None
+        self.imputer_ = None
+        self.features_actuales = ['body_size', 'upper_wick', 'lower_wick', 'total_range',
+                                  'body_ratio', 'upper_wick_ratio', 'lower_wick_ratio']
+
+    def fit(self, X, y=None):
+        print(f">>> Starting step: CandleClusterer.fit (k={self.n_clusters})")
+        if not all(f in X.columns for f in self.features_actuales):
+             raise ValueError("Candle features must be calculated before clustering.")
+
+        X_features = X[self.features_actuales].copy()
+        self.imputer_ = SimpleImputer(strategy='mean')
+        X_imputed = self.imputer_.fit_transform(X_features)
+
+        self.kmeans_ = KMeans(n_clusters=self.n_clusters, random_state=self.random_state, n_init=10)
+        self.kmeans_.fit(X_imputed)
+        print("   KMeans fitted.")
+
+        # --- Ajuste del Mapeo de Patrones ---
+        print("   Fitting pattern mapping...")
+        # 1. Predecir clusters en los datos de entrenamiento (ya imputados)
+        clusters_fit = self.kmeans_.predict(X_imputed)
+        # Crear una copia temporal para añadir clusters sin modificar X original
+        X_fit_copy = X.copy()
+        X_fit_copy['candle_cluster'] = clusters_fit.astype(str)
+
+        # 2. Crear patrones básicos en los datos de entrenamiento
+        basic_patterns_fit = create_basic_patterns(
+            X_fit_copy,
+            cluster_column='candle_cluster',
+            n_candles=self.n_candles
+        )
+
+        # 3. Crear y almacenar el mapeo basado en los patrones de entrenamiento
+        self.pattern_mapping_ = create_pattern_mapping(
+            basic_patterns_fit,
+            min_threshold=self.min_pattern_threshold
+        )
+        print(f"   Pattern mapping created. {len(self.pattern_mapping_)} rare patterns will be mapped.")
+
+        print("<<< Finished step: CandleClusterer.fit")
+        return self
+
+    def transform(self, X):
+        print(">>> Starting step: CandleClusterer.transform")
+        if self.kmeans_ is None or self.imputer_ is None:
+            raise RuntimeError("CandleClusterer must be fitted before transforming.")
+        # Asegurarse de que las features existen también en los datos a transformar
+        if not all(f in X.columns for f in self.features_actuales):
+             raise ValueError("Candle features missing in data passed to transform.")
+
+        X_transformed = X.copy()
+        X_features = X_transformed[self.features_actuales].copy()
+        X_imputed = self.imputer_.transform(X_features) # Usar imputer ajustado
+
+        # 1. Predecir clusters
+        clusters = self.kmeans_.predict(X_imputed)
+        X_transformed['candle_cluster'] = clusters.astype(str)
+        print("   Candle clusters predicted.")
+
+        # 2. Crear patrones básicos
+        X_transformed['pattern'] = create_basic_patterns(
+            X_transformed,
+            cluster_column='candle_cluster',
+            n_candles=self.n_candles
+        )
+        print("   Basic patterns created.")
+
+        # 3. Aplicar el mapeo de patrones aprendido en fit
+        if self.pattern_mapping_ is not None and self.pattern_mapping_: # Si hay un mapeo que aplicar
+            print("   Applying pattern mapping...")
+            X_transformed['pattern'] = apply_pattern_mapping(
+                X_transformed['pattern'],
+                self.pattern_mapping_
+            )
+            print("   Mapped patterns applied.")
+        else:
+            print("   No pattern mapping to apply (or mapping is empty).")
+
+        # Ya no necesitamos la columna intermedia de cluster individual
+        # X_transformed = X_transformed.drop(columns=['candle_cluster']) # Opcional
+
+        print("<<< Finished step: CandleClusterer.transform")
+        return X_transformed
+    
+
+# --- Helper to select feature columns ---
+def select_features(df, feature_list):
+    """Selects specified features, handling missing ones."""
+    print(f"Selecting features...")
+    available_features = [f for f in feature_list if f in df.columns]
+    missing = set(feature_list) - set(available_features)
+    if missing:
+        print(f"Warning: Missing expected features: {missing}")
+    return df[available_features]
+
+
+def replace_inf_with_nan(df):
+    """Replaces infinite values with NaN."""
+    print(">>> Starting step: replace_inf_with_nan")
+    df_out = df.copy()
+    problematic_cols_found = []
+
+    # Identify columns that pandas *thinks* are numeric
+    potential_numeric_cols = df_out.select_dtypes(include=np.number).columns
+    print(f"  Columns initially identified as numeric: {list(potential_numeric_cols)}") # DEBUG
+
+    # Filter out columns that might contain non-scalar types like arrays, even if dtype is numeric/object
+    truly_numeric_cols = []
+    for col in potential_numeric_cols:
+        print(f"    Checking column '{col}' for non-scalar types...") # DEBUG
+        try:
+            # Check if any element is a list or ndarray
+            # Use .iloc[:100] for faster check on large debug datasets
+            sample_limit = min(100, len(df_out))
+            is_problematic = df_out[col].iloc[:sample_limit].apply(lambda x: isinstance(x, (list, np.ndarray))).any()
+            if is_problematic:
+                 # If sample is problematic, check the whole column to be sure
+                 if df_out[col].apply(lambda x: isinstance(x, (list, np.ndarray))).any():
+                      print(f"      WARNING: Column '{col}' (dtype: {df_out[col].dtype}) contains arrays/lists. Excluding from inf replacement.") # DEBUG
+                      problematic_cols_found.append(col)
+                      continue # Skip this column
+            truly_numeric_cols.append(col)
+        except Exception as check_err:
+            print(f"      WARNING: Error checking column '{col}' for array types: {check_err}. Excluding cautiously.") # DEBUG
+            problematic_cols_found.append(col)
+            continue
+
+    print(f"  Columns confirmed for inf replacement: {truly_numeric_cols}") # DEBUG
+    if problematic_cols_found:
+        print(f"  Columns excluded due to potential array content: {problematic_cols_found}") # DEBUG
+
+    if not truly_numeric_cols:
+        print("  No suitable numeric columns found for inf replacement.")
+        print("<<< Finished step: replace_inf_with_nan")
+        return df_out
+
+    # Proceed with replacement only on confirmed numeric columns
+    try:
+        # Check for inf values *before* replacement in the confirmed columns
+        inf_count_before = np.isinf(df_out[truly_numeric_cols]).values.sum()
+        if inf_count_before > 0:
+            print(f"  Found {inf_count_before} infinite values in confirmed numeric columns before replacement.")
+            # Apply replace only to the subset of truly numeric columns
+            df_out[truly_numeric_cols] = df_out[truly_numeric_cols].replace([np.inf, -np.inf], np.nan)
+
+            # Verification after replacement
+            inf_count_after = np.isinf(df_out[truly_numeric_cols]).values.sum()
+            nan_count_after = df_out[truly_numeric_cols].isna().values.sum()
+            print(f"  Infinite values remaining after replacement in confirmed columns: {inf_count_after}")
+            print(f"  Total NaNs after replacing inf in confirmed columns: {nan_count_after}")
+        else:
+            print("  No infinite values found in confirmed numeric columns.")
+
+    except TypeError as te:
+         # This might still occur if a column sneaked through or replace itself fails
+         print(f"  ERROR (TypeError) during inf replacement: {te}") # DEBUG
+         print(f"  >>> Check columns: {truly_numeric_cols} <<<") # DEBUG
+         # You might want to add more granular checks here if needed
+         raise te # Re-raise to stop the pipeline
+
+    except Exception as e:
+         print(f"  ERROR (Other) during inf replacement: {e}") # DEBUG
+         raise e # Re-raise
+
+    print("<<< Finished step: replace_inf_with_nan")
+    return df_out
+
+
+def drop_nan_rows(df):
+    """Drops rows containing any NaN values."""
+    print(">>> Starting step: drop_nan_rows")
+    rows_before = len(df)
+    print(f"  DataFrame shape before dropna: {df.shape}") # DEBUG
+
+    # --- DEBUG: Identify columns with NaNs ---
+    nan_counts = df.isna().sum()
+    cols_with_nan = nan_counts[nan_counts > 0]
+    if not cols_with_nan.empty:
+        print(f"  Columns containing NaN values (count):") # DEBUG
+        # Print columns with NaN counts for easier debugging
+        for col, count in cols_with_nan.items():
+             print(f"    - {col}: {count} NaNs") # DEBUG
+        # Optionally print total NaN count across all columns
+        total_nan_values = cols_with_nan.sum()
+        print(f"  Total NaN values across these columns: {total_nan_values}") # DEBUG
+    else:
+        print("  No NaN values found before dropping.") # DEBUG
+    # --- End DEBUG ---
+
+    # Perform the dropna operation
+    df_cleaned = df.dropna()
+    rows_after = len(df_cleaned)
+
+    print(f"  DataFrame shape after dropna: {df_cleaned.shape}") # DEBUG
+    print(f"  Dropping NaN rows: {rows_before} -> {rows_after} rows ({rows_before - rows_after} rows removed)") # DEBUG
+    print("<<< Finished step: drop_nan_rows")
+    return df_cleaned
+
+
+def engineer_features(df, n_candles=6, n_clusters=8, min_pattern_threshold=10, clusterer=None, fit_clusterer=False, random_state=42):
+    """
+    Aplica toda la ingeniería de características: indicadores técnicos, velas, clustering,
+    reemplazo de inf y conversión de booleanos.
+
+    Args:
+        df (pd.DataFrame): DataFrame de entrada.
+        n_candles (int): Número de velas para características de velas y patrones.
+        n_clusters (int): Número de clusters para CandleClusterer.
+        clusterer (CandleClusterer, optional): Instancia preajustada de CandleClusterer.
+        fit_clusterer (bool): Si es True, ajusta un nuevo CandleClusterer. Ignorado si se proporciona 'clusterer'.
+        random_state (int): Semilla aleatoria para el clustering.
+
+    Returns:
+        tuple: (pd.DataFrame, CandleClusterer or None)
+               DataFrame con características ingenierizadas y la instancia del clusterer ajustado (si fit_clusterer=True),
+               o el clusterer pasado (si se proporcionó), o None.
+    """
+    print("--- Starting Feature Engineering ---")
+    df_eng = df.copy()
+    fitted_clusterer = clusterer # Start with the passed clusterer
+
+    # 1. Indicadores Técnicos
+    df_eng = apply_technical_indicators(df_eng)
+
+    # 2. Características de Velas (base + vector)
+    df_eng = apply_candle_features(df_eng, n_candles=n_candles)
+
+    # 3. Clustering de Velas
+    if fit_clusterer and clusterer is None:
+        print("   Fitting and transforming with NEW CandleClusterer...")
+        fitted_clusterer = CandleClusterer(
+            n_clusters=n_clusters,
+            n_candles=n_candles,
+            min_pattern_threshold=min_pattern_threshold, # <-- Añadido aquí
+            random_state=random_state
+        )
+        try:
+            # Fit necesita las características base de velas, transform añade 'candle_cluster' y 'pattern'
+            fitted_clusterer.fit(df_eng) # Ajusta con los datos actuales
+            df_eng = fitted_clusterer.transform(df_eng) # Transforma
+        except Exception as e:
+            print(f"   ERROR during CandleClusterer fit/transform: {e}")
+            # Decide how to handle: raise error, return None, etc.
+            # For now, let's print and continue without clustering features
+            fitted_clusterer = None # Ensure no clusterer is returned if fit failed
+    elif clusterer is not None:
+        print("   Transforming with PROVIDED CandleClusterer...")
+        try:
+            df_eng = clusterer.transform(df_eng) # Usa el clusterer preajustado
+        except Exception as e:
+            print(f"   ERROR during CandleClusterer transform with provided clusterer: {e}")
+            # Continue without clustering features if transform fails
+            pass # df_eng remains as it was before transform attempt
+    else:
+        print("   Skipping Candle Clustering (no clusterer provided and fit_clusterer=False).")
+
+
+    # 4. Reemplazar Infinitos
+    df_eng = replace_inf_with_nan(df_eng)
+
+    # 5. Convertir Booleanos (Opcional - descomentar si es necesario)
+    # print("   Applying boolean conversion...")
+    # df_eng = convert_bools_to_int(df_eng)
+
+    print("--- Finished Feature Engineering ---")
+    return df_eng, fitted_clusterer

@@ -1,0 +1,185 @@
+2025-04-22 23:22:05,906 - INFO - realtime_processor.py:50 - Función 'engineer_features' cargada correctamente.
+2025-04-22 23:22:05,908 - INFO - realtime_processor.py:141 - Cargando modelos de predicción...
+2025-04-22 23:22:06,409 - INFO - realtime_processor.py:164 -   - Metadata cargada desde: models/EURUSD/forex_rf_pipeline_eurusd_5mins_metadata.json
+2025-04-22 23:22:06,409 - INFO - realtime_processor.py:173 - Modelos y metadata cargados para EURUSD_5 mins:
+2025-04-22 23:22:06,409 - INFO - realtime_processor.py:174 -   - Clusterer: models/EURUSD/forex_candle_clusterer_eurusd_5mins.joblib
+2025-04-22 23:22:06,410 - INFO - realtime_processor.py:175 -   - Pipeline: models/EURUSD/forex_rf_pipeline_eurusd_5mins.joblib
+2025-04-22 23:22:06,410 - INFO - realtime_processor.py:179 -     - Umbral Compra Óptimo: 0.6500000000000001
+2025-04-22 23:22:06,410 - INFO - realtime_processor.py:180 -     - Umbral Venta Óptimo: 0.7000000000000002
+2025-04-22 23:22:06,410 - INFO - realtime_processor.py:1002 - Intentando conectar a IBKR TWS/Gateway...
+2025-04-22 23:22:06,415 - INFO - client.py:194 - sent startApi
+2025-04-22 23:22:06,416 - INFO - client.py:88 - REQUEST startApi {}
+2025-04-22 23:22:06,416 - INFO - client.py:77 - SENDING startApi b'\x00\x00\x00\t71\x002\x0027\x00\x00'
+2025-04-22 23:22:06,416 - INFO - realtime_processor.py:195 - Conectado a IBKR.
+2025-04-22 23:22:09,420 - INFO - realtime_processor.py:1013 - Iniciando hilo de la API...
+2025-04-22 23:22:09,420 - INFO - realtime_processor.py:911 - Iniciando bucle de eventos de EClient...
+2025-04-22 23:22:09,422 - INFO - wrapper.py:46 - ANSWER nextValidId {'orderId': 1}
+2025-04-22 23:22:09,422 - INFO - realtime_processor.py:204 - nextValidId: 1
+2025-04-22 23:22:09,422 - INFO - realtime_processor.py:242 - Esperando 171.00 segundos hasta el próximo intervalo de 5 minutos (2025-04-23 04:25:00 UTC)...
+2025-04-22 23:25:00,430 - INFO - realtime_processor.py:244 - Espera completada. Procediendo a solicitar datos históricos.
+2025-04-22 23:25:00,431 - INFO - realtime_processor.py:255 - Solicitando datos históricos hasta: 20250423 04:25:00 UTC
+2025-04-22 23:25:00,433 - INFO - realtime_processor.py:258 - Solicitando datos históricos iniciales...
+2025-04-22 23:25:00,434 - INFO - realtime_processor.py:287 - Solicitando datos históricos para EURUSD_5 mins (5 mins, Dur: 2 D) con reqId 1
+2025-04-22 23:25:00,435 - INFO - client.py:88 - REQUEST reqHistoricalData {'reqId': 1, 'contract': 1488430987632: 0,EUR,CASH,,0,,,IDEALPRO,,USD,,,False,,,,combo:, 'endDateTime': '20250423 04:25:00 UTC', 'durationStr': '2 D', 'barSizeSetting': '5 mins', 'whatToShow': 'MIDPOINT', 'useRTH': 1, 'formatDate': 1, 'keepUpToDate': False, 'chartOptions': []}
+2025-04-22 23:25:00,436 - INFO - client.py:77 - SENDING reqHistoricalData b'\x00\x00\x00Z20\x001\x000\x00EUR\x00CASH\x00\x000.0\x00\x00\x00IDEALPRO\x00\x00USD\x00\x00\x000\x0020250423 04:25:00 UTC\x005 mins\x002 D\x001\x00MIDPOINT\x001\x000\x00\x00'
+2025-04-22 23:25:00,437 - INFO - realtime_processor.py:303 - Esperando 1 streams de datos históricos...
+2025-04-22 23:25:00,440 - INFO - wrapper.py:46 - ANSWER managedAccounts {'accountsList': 'DU9098184'}
+2025-04-22 23:25:00,441 - INFO - wrapper.py:46 - ANSWER error {'reqId': -1, 'errorCode': 2104, 'errorString': 'La conexión al centro de datos funciona correctamente:usfarm.nj', 'advancedOrderRejectJson': ''}
+2025-04-22 23:25:00,442 - ERROR - wrapper.py:57 - ERROR -1 2104 La conexión al centro de datos funciona correctamente:usfarm.nj
+2025-04-22 23:25:00,443 - INFO - wrapper.py:46 - ANSWER error {'reqId': -1, 'errorCode': 2104, 'errorString': 'La conexión al centro de datos funciona correctamente:cashfarm', 'advancedOrderRejectJson': ''}
+2025-04-22 23:25:00,444 - ERROR - wrapper.py:57 - ERROR -1 2104 La conexión al centro de datos funciona correctamente:cashfarm
+2025-04-22 23:25:00,445 - INFO - wrapper.py:46 - ANSWER error {'reqId': -1, 'errorCode': 2104, 'errorString': 'La conexión al centro de datos funciona correctamente:usfarm', 'advancedOrderRejectJson': ''}
+2025-04-22 23:25:00,446 - ERROR - wrapper.py:57 - ERROR -1 2104 La conexión al centro de datos funciona correctamente:usfarm
+2025-04-22 23:25:00,447 - INFO - wrapper.py:46 - ANSWER error {'reqId': -1, 'errorCode': 2106, 'errorString': 'La conexión al centro de datos HMDS funciona correctamente:euhmds', 'advancedOrderRejectJson': ''}
+2025-04-22 23:25:00,448 - ERROR - wrapper.py:57 - ERROR -1 2106 La conexión al centro de datos HMDS funciona correctamente:euhmds
+2025-04-22 23:25:00,449 - INFO - wrapper.py:46 - ANSWER error {'reqId': -1, 'errorCode': 2106, 'errorString': 'La conexión al centro de datos HMDS funciona correctamente:cashhmds', 'advancedOrderRejectJson': ''}
+2025-04-22 23:25:00,450 - ERROR - wrapper.py:57 - ERROR -1 2106 La conexión al centro de datos HMDS funciona correctamente:cashhmds
+2025-04-22 23:25:00,451 - INFO - wrapper.py:46 - ANSWER error {'reqId': -1, 'errorCode': 2106, 'errorString': 'La conexión al centro de datos HMDS funciona correctamente:fundfarm', 'advancedOrderRejectJson': ''}
+2025-04-22 23:25:00,451 - ERROR - wrapper.py:57 - ERROR -1 2106 La conexión al centro de datos HMDS funciona correctamente:fundfarm
+2025-04-22 23:25:00,451 - INFO - wrapper.py:46 - ANSWER error {'reqId': -1, 'errorCode': 2106, 'errorString': 'La conexión al centro de datos HMDS funciona correctamente:ushmds', 'advancedOrderRejectJson': ''}
+2025-04-22 23:25:00,451 - ERROR - wrapper.py:57 - ERROR -1 2106 La conexión al centro de datos HMDS funciona correctamente:ushmds
+2025-04-22 23:25:00,452 - INFO - wrapper.py:46 - ANSWER error {'reqId': -1, 'errorCode': 2158, 'errorString': 'La conexión de la granja de datos "sec-def" funciona correctamente:secdefil', 'advancedOrderRejectJson': ''}
+2025-04-22 23:25:00,452 - ERROR - wrapper.py:57 - ERROR -1 2158 La conexión de la granja de datos "sec-def" funciona correctamente:secdefil
+2025-04-22 23:25:00,452 - INFO - wrapper.py:46 - ANSWER error {'reqId': -1, 'errorCode': 2103, 'errorString': 'Se ha perdido la conexión al centro de datos:usfarm.nj', 'advancedOrderRejectJson': ''}
+2025-04-22 23:25:00,452 - ERROR - wrapper.py:57 - ERROR -1 2103 Se ha perdido la conexión al centro de datos:usfarm.nj
+2025-04-22 23:25:00,452 - ERROR - realtime_processor.py:872 - ERROR CRÍTICO API (posible desconexión): reqId=-1, Code=2103, Msg=Se ha perdido la conexión al centro de datos:usfarm.nj
+2025-04-22 23:25:00,453 - INFO - wrapper.py:46 - ANSWER error {'reqId': -1, 'errorCode': 2104, 'errorString': 'La conexión al centro de datos funciona correctamente:usfarm.nj', 'advancedOrderRejectJson': ''}
+2025-04-22 23:25:00,453 - ERROR - wrapper.py:57 - ERROR -1 2104 La conexión al centro de datos funciona correctamente:usfarm.nj
+2025-04-22 23:25:01,010 - INFO - wrapper.py:46 - ANSWER historicalDataEnd {'reqId': 1, 'start': '20250421 00:25:00 US/Eastern', 'end': '20250423 00:25:00 US/Eastern'}
+2025-04-22 23:25:01,010 - INFO - realtime_processor.py:456 - Recepción de datos históricos finalizada para EURUSD_5 mins (reqId 1). Periodo: 20250421 00:25:00 US/Eastern - 20250423 00:25:00 US/Eastern
+2025-04-22 23:25:01,014 - INFO - realtime_processor.py:478 - Stored last historical bar time for EURUSD_5 mins: 2025-04-23 04:20:00 UTC
+2025-04-22 23:25:01,015 - INFO - realtime_processor.py:479 - Almacenadas 371 barras históricas para EURUSD_5 mins.
+2025-04-22 23:25:01,015 - INFO - realtime_processor.py:325 - Datos históricos iniciales recibidos para EURUSD_5 mins.
+2025-04-22 23:25:01,015 - INFO - realtime_processor.py:332 - Todos los datos históricos iniciales necesarios han sido recibidos.
+2025-04-22 23:25:01,015 - INFO - realtime_processor.py:336 - Iniciando requests de datos en tiempo real...
+2025-04-22 23:25:01,016 - INFO - realtime_processor.py:344 - Iniciando requests de datos en tiempo real (barras de 5 segundos)...
+2025-04-22 23:25:01,016 - INFO - realtime_processor.py:364 - Solicitando barras en tiempo real para EURUSD_5 mins (reqId 2)
+2025-04-22 23:25:01,016 - INFO - client.py:88 - REQUEST reqRealTimeBars {'reqId': 2, 'contract': 1488430987632: 0,EUR,CASH,,0,,,IDEALPRO,,USD,,,False,,,,combo:, 'barSize': 5, 'whatToShow': 'MIDPOINT', 'useRTH': 1, 'realTimeBarsOptions': []}
+2025-04-22 23:25:01,016 - INFO - client.py:77 - SENDING reqRealTimeBars b'\x00\x00\x00750\x003\x002\x000\x00EUR\x00CASH\x00\x000.0\x00\x00\x00IDEALPRO\x00\x00USD\x00\x00\x005\x00MIDPOINT\x001\x00\x00'
+2025-04-22 23:25:05,165 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382300, 'open_': 1.13796, 'high': 1.138015, 'low': 1.13796, 'close': 1.13801, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:25:10,798 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382305, 'open_': 1.13801, 'high': 1.138025, 'low': 1.138005, 'close': 1.13801, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:25:15,177 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382310, 'open_': 1.13801, 'high': 1.138015, 'low': 1.138, 'close': 1.138005, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:25:20,431 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382315, 'open_': 1.138005, 'high': 1.138005, 'low': 1.138, 'close': 1.138, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:25:25,192 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382320, 'open_': 1.138, 'high': 1.138005, 'low': 1.138, 'close': 1.138005, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:25:30,210 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382325, 'open_': 1.138005, 'high': 1.138005, 'low': 1.137965, 'close': 1.13798, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:25:35,328 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382330, 'open_': 1.13798, 'high': 1.138005, 'low': 1.137975, 'close': 1.138, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:25:40,799 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382335, 'open_': 1.138, 'high': 1.138005, 'low': 1.13798, 'close': 1.138005, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:25:45,800 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382340, 'open_': 1.138005, 'high': 1.138005, 'low': 1.138005, 'close': 1.138005, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:25:50,801 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382345, 'open_': 1.138005, 'high': 1.138005, 'low': 1.138005, 'close': 1.138005, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:25:55,800 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382350, 'open_': 1.138005, 'high': 1.138005, 'low': 1.138005, 'close': 1.138005, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:26:00,674 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382355, 'open_': 1.138005, 'high': 1.138005, 'low': 1.137985, 'close': 1.137985, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:26:05,104 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382360, 'open_': 1.137985, 'high': 1.137985, 'low': 1.13798, 'close': 1.13798, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:26:10,818 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382365, 'open_': 1.13798, 'high': 1.138005, 'low': 1.13795, 'close': 1.13795, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:26:15,799 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382370, 'open_': 1.13795, 'high': 1.13804, 'low': 1.137945, 'close': 1.13804, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:26:20,801 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382375, 'open_': 1.13804, 'high': 1.13804, 'low': 1.138025, 'close': 1.138025, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:26:25,424 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382380, 'open_': 1.138025, 'high': 1.138025, 'low': 1.138025, 'close': 1.138025, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:26:30,619 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382385, 'open_': 1.138025, 'high': 1.13803, 'low': 1.13801, 'close': 1.13802, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:26:35,801 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382390, 'open_': 1.13802, 'high': 1.138025, 'low': 1.13802, 'close': 1.138025, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:26:40,434 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382395, 'open_': 1.138025, 'high': 1.13821, 'low': 1.138025, 'close': 1.138195, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:26:45,156 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382400, 'open_': 1.138195, 'high': 1.13821, 'low': 1.138195, 'close': 1.13821, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:26:50,799 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382405, 'open_': 1.13821, 'high': 1.13821, 'low': 1.13813, 'close': 1.138135, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:26:55,802 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382410, 'open_': 1.138135, 'high': 1.138145, 'low': 1.13813, 'close': 1.138145, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:27:00,062 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382415, 'open_': 1.138145, 'high': 1.13815, 'low': 1.13814, 'close': 1.13815, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:27:05,484 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382420, 'open_': 1.13815, 'high': 1.138155, 'low': 1.13813, 'close': 1.13813, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:27:10,799 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382425, 'open_': 1.13813, 'high': 1.13816, 'low': 1.13813, 'close': 1.138155, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:27:15,349 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382430, 'open_': 1.138155, 'high': 1.1382, 'low': 1.138155, 'close': 1.13819, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:27:20,176 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382435, 'open_': 1.13819, 'high': 1.138195, 'low': 1.13816, 'close': 1.138165, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:27:25,060 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382440, 'open_': 1.138165, 'high': 1.138205, 'low': 1.138155, 'close': 1.1382, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:27:30,800 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382445, 'open_': 1.1382, 'high': 1.1382, 'low': 1.138135, 'close': 1.138145, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:27:35,799 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382450, 'open_': 1.138145, 'high': 1.138155, 'low': 1.138125, 'close': 1.138145, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:27:40,799 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382455, 'open_': 1.138145, 'high': 1.138155, 'low': 1.13814, 'close': 1.13815, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:27:45,799 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382460, 'open_': 1.13815, 'high': 1.13815, 'low': 1.13814, 'close': 1.13815, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:27:50,674 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382465, 'open_': 1.13815, 'high': 1.13825, 'low': 1.13815, 'close': 1.138235, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:27:55,167 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382470, 'open_': 1.138235, 'high': 1.138285, 'low': 1.13823, 'close': 1.13828, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:28:00,096 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382475, 'open_': 1.13828, 'high': 1.13844, 'low': 1.138275, 'close': 1.13844, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:28:05,701 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382480, 'open_': 1.13844, 'high': 1.13844, 'low': 1.138305, 'close': 1.13837, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:28:10,638 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382485, 'open_': 1.13837, 'high': 1.138375, 'low': 1.138355, 'close': 1.13836, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:28:15,801 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382490, 'open_': 1.13836, 'high': 1.13837, 'low': 1.13829, 'close': 1.138295, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:28:20,800 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382495, 'open_': 1.138295, 'high': 1.1383, 'low': 1.138295, 'close': 1.1383, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:28:25,351 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382500, 'open_': 1.1383, 'high': 1.138305, 'low': 1.138295, 'close': 1.1383, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:28:30,617 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382505, 'open_': 1.1383, 'high': 1.1383, 'low': 1.13825, 'close': 1.138265, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:28:35,229 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382510, 'open_': 1.138265, 'high': 1.13833, 'low': 1.13824, 'close': 1.13828, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:28:40,137 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382515, 'open_': 1.13828, 'high': 1.13829, 'low': 1.138275, 'close': 1.13829, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:28:45,545 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382520, 'open_': 1.13829, 'high': 1.1383, 'low': 1.13828, 'close': 1.13829, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:28:50,800 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382525, 'open_': 1.13829, 'high': 1.13829, 'low': 1.138285, 'close': 1.13829, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:28:55,121 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382530, 'open_': 1.13829, 'high': 1.13829, 'low': 1.138155, 'close': 1.138155, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:29:00,058 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382535, 'open_': 1.138155, 'high': 1.138225, 'low': 1.13814, 'close': 1.138215, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:29:05,070 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382540, 'open_': 1.138215, 'high': 1.13822, 'low': 1.138195, 'close': 1.138205, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:29:10,296 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382545, 'open_': 1.138205, 'high': 1.138285, 'low': 1.138205, 'close': 1.13828, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:29:15,115 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382550, 'open_': 1.13828, 'high': 1.138335, 'low': 1.13828, 'close': 1.138335, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:29:20,183 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382555, 'open_': 1.138335, 'high': 1.13841, 'low': 1.138335, 'close': 1.138395, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:29:25,552 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382560, 'open_': 1.138395, 'high': 1.138465, 'low': 1.138395, 'close': 1.138445, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:29:30,493 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382565, 'open_': 1.138445, 'high': 1.13847, 'low': 1.138445, 'close': 1.138455, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:29:35,583 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382570, 'open_': 1.138455, 'high': 1.138465, 'low': 1.138435, 'close': 1.138445, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:29:40,508 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382575, 'open_': 1.138445, 'high': 1.138445, 'low': 1.138295, 'close': 1.1383, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:29:45,086 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382580, 'open_': 1.1383, 'high': 1.1383, 'low': 1.13827, 'close': 1.138275, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:29:50,798 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382585, 'open_': 1.138275, 'high': 1.138285, 'low': 1.13827, 'close': 1.138275, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:29:55,746 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382590, 'open_': 1.138275, 'high': 1.138305, 'low': 1.13827, 'close': 1.138305, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:30:00,447 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382595, 'open_': 1.138305, 'high': 1.138305, 'low': 1.13828, 'close': 1.138305, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:30:05,633 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382600, 'open_': 1.138305, 'high': 1.138305, 'low': 1.138305, 'close': 1.138305, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:30:05,634 - INFO - realtime_processor.py:542 - Completada barra 5-min para EURUSD_5 mins @ 2025-04-23 04:25:00 O:1.13796 H:1.13847 L:1.13794 C:1.13830 V:-60
+2025-04-22 23:30:05,634 - INFO - realtime_processor.py:800 - Periodo de guardado inicializado para EURUSD_5 mins a 20250423_04.
+2025-04-22 23:30:06,502 - INFO - realtime_processor.py:703 -     -> Tiempo Ingeniería Características (EURUSD_5 mins): 0.8523 segundos
+2025-04-22 23:30:09,423 - INFO - realtime_processor.py:759 - --- Predicción para EURUSD_5 mins @ 2025-04-23 04:25:00 ---
+2025-04-22 23:30:09,424 - INFO - realtime_processor.py:760 -     Predicción   : objetivo_venta_alcanzado
+2025-04-22 23:30:09,424 - INFO - realtime_processor.py:764 -     Probabilidades: {'Prob(no_objetivo_alcanzado)': '0.4807', 'Prob(objetivo_compra_alcanzado)': '0.0032', 'Prob(objetivo_venta_alcanzado)': '0.5161'}
+2025-04-22 23:30:09,424 - INFO - realtime_processor.py:767 - ---------------------------------------------------------
+2025-04-22 23:30:09,424 - INFO - realtime_processor.py:721 -     -> Tiempo Predicción (EURUSD_5 mins): 2.9211 segundos
+2025-04-22 23:30:10,300 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382605, 'open_': 1.138305, 'high': 1.138415, 'low': 1.138305, 'close': 1.138415, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:30:15,798 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382610, 'open_': 1.138415, 'high': 1.138415, 'low': 1.138355, 'close': 1.13838, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:30:20,798 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382615, 'open_': 1.13838, 'high': 1.13839, 'low': 1.13838, 'close': 1.13839, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:30:25,102 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382620, 'open_': 1.13839, 'high': 1.138435, 'low': 1.13839, 'close': 1.138435, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:30:30,800 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382625, 'open_': 1.138435, 'high': 1.138435, 'low': 1.138415, 'close': 1.138415, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:30:35,798 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382630, 'open_': 1.138415, 'high': 1.13842, 'low': 1.138405, 'close': 1.13841, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:30:40,800 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382635, 'open_': 1.13841, 'high': 1.138425, 'low': 1.138405, 'close': 1.138415, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:30:45,799 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382640, 'open_': 1.138415, 'high': 1.138415, 'low': 1.138405, 'close': 1.13841, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:30:50,071 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382645, 'open_': 1.13841, 'high': 1.13841, 'low': 1.13816, 'close': 1.13816, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:30:55,060 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382650, 'open_': 1.13816, 'high': 1.138185, 'low': 1.138135, 'close': 1.13814, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:31:00,657 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382655, 'open_': 1.13814, 'high': 1.138155, 'low': 1.13814, 'close': 1.138155, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:31:05,307 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382660, 'open_': 1.138155, 'high': 1.1382, 'low': 1.13813, 'close': 1.138195, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:31:10,262 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382665, 'open_': 1.138195, 'high': 1.1382, 'low': 1.138165, 'close': 1.13817, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:31:15,799 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382670, 'open_': 1.13817, 'high': 1.138285, 'low': 1.13817, 'close': 1.13828, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:31:20,755 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382675, 'open_': 1.13828, 'high': 1.13828, 'low': 1.138265, 'close': 1.13827, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:31:25,798 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382680, 'open_': 1.13827, 'high': 1.13828, 'low': 1.13825, 'close': 1.138255, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:31:30,799 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382685, 'open_': 1.138255, 'high': 1.138265, 'low': 1.13825, 'close': 1.13826, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:31:35,275 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382690, 'open_': 1.13826, 'high': 1.138265, 'low': 1.13825, 'close': 1.13825, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:31:40,448 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382695, 'open_': 1.13825, 'high': 1.13826, 'low': 1.138245, 'close': 1.13826, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:31:45,501 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382700, 'open_': 1.13826, 'high': 1.13826, 'low': 1.13822, 'close': 1.13822, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:31:50,223 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382705, 'open_': 1.13822, 'high': 1.138235, 'low': 1.13822, 'close': 1.13823, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:31:55,267 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382710, 'open_': 1.13823, 'high': 1.13829, 'low': 1.13823, 'close': 1.138285, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:32:00,138 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382715, 'open_': 1.138285, 'high': 1.138285, 'low': 1.138275, 'close': 1.13828, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:32:05,802 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382720, 'open_': 1.13828, 'high': 1.138285, 'low': 1.138275, 'close': 1.13828, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:32:10,798 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382725, 'open_': 1.13828, 'high': 1.13831, 'low': 1.138275, 'close': 1.13831, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:32:15,542 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382730, 'open_': 1.13831, 'high': 1.138345, 'low': 1.138305, 'close': 1.138345, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:32:20,585 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382735, 'open_': 1.138345, 'high': 1.13839, 'low': 1.138345, 'close': 1.13839, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:32:25,799 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382740, 'open_': 1.13839, 'high': 1.1384, 'low': 1.13839, 'close': 1.138395, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:32:30,802 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382745, 'open_': 1.138395, 'high': 1.13841, 'low': 1.138395, 'close': 1.138405, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:32:35,797 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382750, 'open_': 1.138405, 'high': 1.13841, 'low': 1.1384, 'close': 1.13841, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:32:40,430 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382755, 'open_': 1.13841, 'high': 1.13843, 'low': 1.138395, 'close': 1.13843, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:32:45,800 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382760, 'open_': 1.13843, 'high': 1.138455, 'low': 1.13838, 'close': 1.138435, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:32:50,164 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382765, 'open_': 1.138435, 'high': 1.138435, 'low': 1.138395, 'close': 1.138405, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:32:55,464 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382770, 'open_': 1.138405, 'high': 1.138405, 'low': 1.138395, 'close': 1.1384, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:33:00,243 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382775, 'open_': 1.1384, 'high': 1.1384, 'low': 1.138335, 'close': 1.13836, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:33:05,180 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382780, 'open_': 1.13836, 'high': 1.138415, 'low': 1.13836, 'close': 1.138395, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:33:10,497 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382785, 'open_': 1.138395, 'high': 1.138395, 'low': 1.13838, 'close': 1.138385, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:33:15,107 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382790, 'open_': 1.138385, 'high': 1.13847, 'low': 1.138385, 'close': 1.13845, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:33:20,204 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382795, 'open_': 1.13845, 'high': 1.138485, 'low': 1.13845, 'close': 1.138475, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:33:25,140 - INFO - wrapper.py:46 - ANSWER realtimeBar {'reqId': 2, 'time': 1745382800, 'open_': 1.138475, 'high': 1.138485, 'low': 1.13847, 'close': 1.13848, 'volume': Decimal('-1'), 'wap': Decimal('-1'), 'count': -1}
+2025-04-22 23:33:28,581 - INFO - realtime_processor.py:1023 - 
+Interrupción de teclado recibida. Desconectando...
+2025-04-22 23:33:28,582 - INFO - realtime_processor.py:1031 - Iniciando secuencia de finalización...
+2025-04-22 23:33:28,582 - INFO - realtime_processor.py:1034 - Llamando a disconnect_from_ib()...
+2025-04-22 23:33:28,582 - INFO - realtime_processor.py:932 - Desconectando de IBKR...
+2025-04-22 23:33:28,582 - INFO - realtime_processor.py:936 - Guardando barras agregadas restantes antes de salir...
+2025-04-22 23:33:28,582 - INFO - realtime_processor.py:940 - Añadiendo última barra parcial para EURUSD_5 mins @ 2025-04-23 04:30:00+00:00
+2025-04-22 23:33:28,583 - INFO - realtime_processor.py:955 - Guardando lote final para EURUSD_5 mins, periodo aprox. 20250423_04
+2025-04-22 23:33:28,586 - INFO - realtime_processor.py:839 - Guardando 2 barras agregadas en data_realtime_aggregated\EURUSD\5mins\20250423_04_final.csv...
+2025-04-22 23:33:28,589 - INFO - realtime_processor.py:848 - Datos agregados guardados exitosamente en data_realtime_aggregated\EURUSD\5mins\20250423_04_final.csv
+2025-04-22 23:33:28,590 - INFO - realtime_processor.py:958 - Limpiando estructuras de datos internas...
+2025-04-22 23:33:28,623 - INFO - client.py:211 - disconnecting
+2025-04-22 23:33:28,623 - INFO - wrapper.py:46 - ANSWER connectionClosed {}
+2025-04-22 23:33:28,624 - INFO - realtime_processor.py:971 - Desconexión de EClient solicitada.
+2025-04-22 23:33:28,624 - INFO - realtime_processor.py:974 - Proceso de desconexión finalizado.
+2025-04-22 23:33:28,624 - INFO - realtime_processor.py:1037 - Esperando a que el hilo de la API finalice...
+2025-04-22 23:33:28,661 - INFO - realtime_processor.py:922 - Bucle de eventos de EClient finalizado.
+2025-04-22 23:33:28,661 - INFO - realtime_processor.py:1046 - Script finalizado.
