@@ -4,16 +4,15 @@ from unittest.mock import patch
 from src.data_extraction.extractor import ForexDataExtractor
 
 class TestForexDataExtractor(unittest.TestCase):
-    @patch('src.data_extraction.extractor.EClient')
-    def test_connection(self, MockedEClient):
-        # Initialize the extractor
-        extractor = ForexDataExtractor()
+    @patch('src.data_extraction.extractor.EClient.connect')
+    def test_connection(self, mock_connect):
+        extractor = ForexDataExtractor(contracts={})
+        extractor.ip_address = '127.0.0.1'
+        extractor.port = 7497
+        extractor.client_id = 1
 
-        # Perform the connection
         extractor.connect_to_ib()
-
-        # Assert that EClient's connect method was called with the correct parameters
-        MockedEClient.connect.assert_called_with(extractor.ip_address, extractor.port, extractor.client_id)
+        mock_connect.assert_called_with('127.0.0.1', 7497, clientId=1)
 
 if __name__ == '__main__':
     unittest.main()

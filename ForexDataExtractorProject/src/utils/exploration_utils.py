@@ -4,6 +4,7 @@ import pytz
 from numpy.lib.stride_tricks import sliding_window_view
 from itertools import combinations
 import os
+from typing import Optional, List, Dict, Union, Tuple
 
 def read_csv_files(folder_path):
     # List all CSV files in the folder
@@ -150,10 +151,15 @@ def sma_engineering_from_close(df, sma_periods, lookback=5, slope_window=5):
     if 'close' not in df.columns:
         raise ValueError("La columna 'close' no existe en el DataFrame.")
     
-    # Crear columnas de SMA
+    new_cols = {}
     sma_cols = [f"SMA_{p}" for p in sma_periods]
+    
+    # Crear columnas de SMA
     for p, col in zip(sma_periods, sma_cols):
-        df[col] = df['close'].rolling(window=p, min_periods=p).mean()
+        new_cols[col] = df['close'].rolling(window=p, min_periods=p).mean()
+    
+    # Crear un DataFrame temporal con las SMAs para facilitar cálculos vectorizados
+    sma_df = pd.DataFrame({k: v for k, v in new_cols.items() if k in sma_cols}, index=df.index)
     
     # MODIFICADO: Ya no eliminamos filas sin datos completos
     longest_sma = f"SMA_{max(sma_periods)}"
@@ -161,72 +167,78 @@ def sma_engineering_from_close(df, sma_periods, lookback=5, slope_window=5):
     # 1. Diferencias y ratios entre cada par de SMAs
     for c1, c2 in combinations(sma_cols, 2):
         # Diferencia absoluta en pips
-        df[f'diff_{c1}_{c2}'] = (df[c1] - df[c2]) * 10000
+        new_cols[f'diff_{c1}_{c2}'] = (sma_df[c1] - sma_df[c2]) * 10000
         # Ratios sin escalado (se evita división por cero)
-        df[f'ratio_{c1}_{c2}'] = df[c1] / df[c2].replace(0, np.nan)
-        df[f'ratio_{c2}_{c1}'] = df[c2] / df[c1].replace(0, np.nan)
+        new_cols[f'ratio_{c1}_{c2}'] = sma_df[c1] / sma_df[c2].replace(0, np.nan)
+        new_cols[f'ratio_{c2}_{c1}'] = sma_df[c2] / sma_df[c1].replace(0, np.nan)
     
     # 2. Métrica de orden (número de diferencias positivas entre SMAs consecutivas)
-    df['sma_order_score'] = (df[sma_cols].diff(axis=1) > 0).sum(axis=1)
+    new_cols['sma_order_score'] = (sma_df[sma_cols].diff(axis=1) > 0).sum(axis=1)
     
     # 3. Pendientes (slopes) de cada SMA y diferencias entre ellas
     slope_cols = []
+    slope_data = {}
     for col in sma_cols:
         slope_col = f'slope_{col}'
         # La pendiente en pips (diferencia entre periodos)
-        df[slope_col] = df[col].diff() * 10000
+        slope_val = sma_df[col].diff() * 10000
+        new_cols[slope_col] = slope_val
+        slope_data[slope_col] = slope_val
         slope_cols.append(slope_col)
+    
+    slope_df = pd.DataFrame(slope_data, index=df.index)
     
     for c1, c2 in combinations(slope_cols, 2):
         # Diferencia entre pendientes en pips
-        df[f'diff_{c1}_{c2}'] = (df[c1] - df[c2]) * 10000
+        new_cols[f'diff_{c1}_{c2}'] = (slope_df[c1] - slope_df[c2]) * 10000
     
     # 4. Normalización respecto a la SMA más larga (relativa, por lo que no se escala)
     for col in sma_cols:
         if col != longest_sma:
-            df[f'norm_diff_{col}_{longest_sma}'] = (df[col] - df[longest_sma]) / df[longest_sma]
+            new_cols[f'norm_diff_{col}_{longest_sma}'] = (sma_df[col] - sma_df[longest_sma]) / sma_df[longest_sma]
     
     # 5. Diferencia relativa entre el precio de cierre y cada SMA (relativa, sin escalado)
     for col in sma_cols:
-        df[f'close_diff_{col}'] = (df['close'] - df[col]) / df[col].replace(0, np.nan)
+        new_cols[f'close_diff_{col}'] = (df['close'] - sma_df[col]) / sma_df[col].replace(0, np.nan)
     
     # 6. Indicadores de cruce (crossovers)
     # Se asume que la SMA de menor periodo es la de corto plazo y la de mayor periodo la de largo plazo
     short_sma = sma_cols[0]
     long_sma = sma_cols[-1]
-    df['crossover'] = np.where(
-        (df[short_sma].shift(1) < df[long_sma].shift(1)) & (df[short_sma] > df[long_sma]),
+    new_cols['crossover'] = np.where(
+        (sma_df[short_sma].shift(1) < sma_df[long_sma].shift(1)) & (sma_df[short_sma] > sma_df[long_sma]),
         1,
         np.where(
-            (df[short_sma].shift(1) > df[long_sma].shift(1)) & (df[short_sma] < df[long_sma]),
+            (sma_df[short_sma].shift(1) > sma_df[long_sma].shift(1)) & (sma_df[short_sma] < sma_df[long_sma]),
             -1,
             0
         )
     )
     
     # 7. Spread o rango entre SMAs en pips
-    df['sma_spread'] = (df[sma_cols].max(axis=1) - df[sma_cols].min(axis=1)) * 10000
+    new_cols['sma_spread'] = (sma_df[sma_cols].max(axis=1) - sma_df[sma_cols].min(axis=1)) * 10000
     
     # 8. Aceleración de las SMAs (segunda diferencia en pips)
     for col in sma_cols:
-        df[f'acc_{col}'] = df[col].diff().diff() * 10000
+        new_cols[f'acc_{col}'] = sma_df[col].diff().diff() * 10000
     
     # 9. Momentum o cambio en un lookback determinado para cada SMA (en pips)
     for col in sma_cols:
-        df[f'{col}_momentum'] = (df[col] - df[col].shift(lookback)) * 10000
-        df[f'{col}_pct_momentum'] = df[f'{col}_momentum'] / df[col].shift(lookback).replace(0, np.nan)
+        momentum = (sma_df[col] - sma_df[col].shift(lookback)) * 10000
+        new_cols[f'{col}_momentum'] = momentum
+        new_cols[f'{col}_pct_momentum'] = momentum / sma_df[col].shift(lookback).replace(0, np.nan)
     
     # 10. Pendiente promedio en una ventana para cada SMA (media móvil de la pendiente en pips)
     for col in sma_cols:
         slope_col = f'slope_{col}'  # ya calculado anteriormente
-        df[f'{col}_slope_mean'] = df[slope_col].rolling(window=slope_window, min_periods=1).mean()
+        new_cols[f'{col}_slope_mean'] = slope_df[slope_col].rolling(window=slope_window, min_periods=1).mean()
     
     # MODIFICADO: Ya no eliminamos filas con NaN
     # Opcionalmente se pueden reemplazar los NaN por valores sensatos
     # df.replace([np.inf, -np.inf], np.nan, inplace=True)
     # df.fillna(0, inplace=True)
     
-    return df
+    return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
 
 def compute_rsi(series, period=14):
@@ -284,10 +296,15 @@ def feature_engineering_rsi(df, periods=[14, 7, 21], close_col='close', lookback
     if close_col not in df.columns:
         raise ValueError(f"La columna {close_col} no existe en el DataFrame.")
 
+    new_cols = {}
+
     # 1. Calcular RSI para diferentes periodos
     rsi_cols = [f"RSI_{p}" for p in periods]
     for p, col in zip(periods, rsi_cols):
-        df[col] = compute_rsi(df[close_col], period=p)
+        new_cols[col] = compute_rsi(df[close_col], period=p)
+
+    # Crear un DataFrame temporal con los RSI para facilitar cálculos vectorizados
+    rsi_df = pd.DataFrame({k: v for k, v in new_cols.items() if k in rsi_cols}, index=df.index)
 
     # Usar el RSI del primer periodo como referencia principal
     main_rsi = rsi_cols[0]
@@ -295,45 +312,46 @@ def feature_engineering_rsi(df, periods=[14, 7, 21], close_col='close', lookback
     # MODIFICADO: Ya no eliminamos filas sin RSI calculado
     
     # 2. Estados del RSI (indicadores binarios)
-    df['rsi_extreme_overbought'] = (df[main_rsi] > 80).astype(int)
-    df['rsi_overbought'] = ((df[main_rsi] <= 80) & (df[main_rsi] > 70)).astype(int)
-    df['rsi_strong'] = ((df[main_rsi] <= 70) & (df[main_rsi] > 60)).astype(int)
-    df['rsi_neutral_high'] = ((df[main_rsi] <= 60) & (df[main_rsi] > 50)).astype(int)
-    df['rsi_neutral_low'] = ((df[main_rsi] <= 50) & (df[main_rsi] > 40)).astype(int)
-    df['rsi_weak'] = ((df[main_rsi] <= 40) & (df[main_rsi] > 30)).astype(int)
-    df['rsi_oversold'] = ((df[main_rsi] <= 30) & (df[main_rsi] > 20)).astype(int)
-    df['rsi_extreme_oversold'] = (df[main_rsi] <= 20).astype(int)
+    new_cols['rsi_extreme_overbought'] = (rsi_df[main_rsi] > 80).astype(int)
+    new_cols['rsi_overbought'] = ((rsi_df[main_rsi] <= 80) & (rsi_df[main_rsi] > 70)).astype(int)
+    new_cols['rsi_strong'] = ((rsi_df[main_rsi] <= 70) & (rsi_df[main_rsi] > 60)).astype(int)
+    new_cols['rsi_neutral_high'] = ((rsi_df[main_rsi] <= 60) & (rsi_df[main_rsi] > 50)).astype(int)
+    new_cols['rsi_neutral_low'] = ((rsi_df[main_rsi] <= 50) & (rsi_df[main_rsi] > 40)).astype(int)
+    new_cols['rsi_weak'] = ((rsi_df[main_rsi] <= 40) & (rsi_df[main_rsi] > 30)).astype(int)
+    new_cols['rsi_oversold'] = ((rsi_df[main_rsi] <= 30) & (rsi_df[main_rsi] > 20)).astype(int)
+    new_cols['rsi_extreme_oversold'] = (rsi_df[main_rsi] <= 20).astype(int)
 
     # 3. Distancias a niveles clave
-    df['dist_rsi_70'] = df[main_rsi] - 70
-    df['dist_rsi_50'] = df[main_rsi] - 50
-    df['dist_rsi_30'] = df[main_rsi] - 30
+    new_cols['dist_rsi_70'] = rsi_df[main_rsi] - 70
+    new_cols['dist_rsi_50'] = rsi_df[main_rsi] - 50
+    new_cols['dist_rsi_30'] = rsi_df[main_rsi] - 30
     
     # Normalizar distancias (como % del rango posible)
-    df['norm_dist_rsi_70'] = (df[main_rsi] - 70) / 30  # normaliza al rango superior (70-100)
-    df['norm_dist_rsi_50'] = (df[main_rsi] - 50) / 50  # normaliza a todo el rango (0-100)
-    df['norm_dist_rsi_30'] = (df[main_rsi] - 30) / 30  # normaliza al rango inferior (0-30)
+    new_cols['norm_dist_rsi_70'] = (rsi_df[main_rsi] - 70) / 30  # normaliza al rango superior (70-100)
+    new_cols['norm_dist_rsi_50'] = (rsi_df[main_rsi] - 50) / 50  # normaliza a todo el rango (0-100)
+    new_cols['norm_dist_rsi_30'] = (rsi_df[main_rsi] - 30) / 30  # normaliza al rango inferior (0-30)
 
     # 4. Pendientes (slopes) del RSI
     for col in rsi_cols:
         # Pendiente directa (variación respecto a la vela anterior)
-        df[f'{col}_slope'] = df[col].diff(1)
+        slope = rsi_df[col].diff(1)
+        new_cols[f'{col}_slope'] = slope
         
         # Pendiente móvil (media de pendientes en una ventana)
-        df[f'{col}_slope_mean'] = df[f'{col}_slope'].rolling(
+        new_cols[f'{col}_slope_mean'] = slope.rolling(
             window=slope_window, min_periods=1).mean()
         
         # Aceleración (cambio en la pendiente)
-        df[f'{col}_acceleration'] = df[f'{col}_slope'].diff(1)
+        new_cols[f'{col}_acceleration'] = slope.diff(1)
 
     # 5. Señales de cruce de niveles importantes
-    df['rsi_cross_30_up'] = ((df[main_rsi].shift(1) < 30) & (df[main_rsi] > 30)).astype(int)
-    df['rsi_cross_50_up'] = ((df[main_rsi].shift(1) < 50) & (df[main_rsi] > 50)).astype(int)
-    df['rsi_cross_70_up'] = ((df[main_rsi].shift(1) < 70) & (df[main_rsi] > 70)).astype(int)
+    new_cols['rsi_cross_30_up'] = ((rsi_df[main_rsi].shift(1) < 30) & (rsi_df[main_rsi] > 30)).astype(int)
+    new_cols['rsi_cross_50_up'] = ((rsi_df[main_rsi].shift(1) < 50) & (rsi_df[main_rsi] > 50)).astype(int)
+    new_cols['rsi_cross_70_up'] = ((rsi_df[main_rsi].shift(1) < 70) & (rsi_df[main_rsi] > 70)).astype(int)
     
-    df['rsi_cross_30_down'] = ((df[main_rsi].shift(1) > 30) & (df[main_rsi] < 30)).astype(int)
-    df['rsi_cross_50_down'] = ((df[main_rsi].shift(1) > 50) & (df[main_rsi] < 50)).astype(int)
-    df['rsi_cross_70_down'] = ((df[main_rsi].shift(1) > 70) & (df[main_rsi] < 70)).astype(int)
+    new_cols['rsi_cross_30_down'] = ((rsi_df[main_rsi].shift(1) > 30) & (rsi_df[main_rsi] < 30)).astype(int)
+    new_cols['rsi_cross_50_down'] = ((rsi_df[main_rsi].shift(1) > 50) & (rsi_df[main_rsi] < 50)).astype(int)
+    new_cols['rsi_cross_70_down'] = ((rsi_df[main_rsi].shift(1) > 70) & (rsi_df[main_rsi] < 70)).astype(int)
 
     # 6. Comparaciones entre diferentes periodos de RSI
     if len(rsi_cols) > 1:
@@ -342,39 +360,40 @@ def feature_engineering_rsi(df, periods=[14, 7, 21], close_col='close', lookback
         slow_rsi = rsi_cols[-1]  # Asumimos que el último es más lento (p.ej. 21)
         
         # Diferencia y ratio
-        df['rsi_fast_minus_slow'] = df[fast_rsi] - df[slow_rsi]
-        df['rsi_fast_ratio_slow'] = df[fast_rsi] / df[slow_rsi].replace(0, np.nan)
+        new_cols['rsi_fast_minus_slow'] = rsi_df[fast_rsi] - rsi_df[slow_rsi]
+        new_cols['rsi_fast_ratio_slow'] = rsi_df[fast_rsi] / rsi_df[slow_rsi].replace(0, np.nan)
         
         # Cruce de RSIs
-        df['rsi_fast_cross_above_slow'] = ((df[fast_rsi].shift(1) < df[slow_rsi].shift(1)) & 
-                                        (df[fast_rsi] > df[slow_rsi])).astype(int)
-        df['rsi_fast_cross_below_slow'] = ((df[fast_rsi].shift(1) > df[slow_rsi].shift(1)) & 
-                                        (df[fast_rsi] < df[slow_rsi])).astype(int)
+        new_cols['rsi_fast_cross_above_slow'] = ((rsi_df[fast_rsi].shift(1) < rsi_df[slow_rsi].shift(1)) & 
+                                        (rsi_df[fast_rsi] > rsi_df[slow_rsi])).astype(int)
+        new_cols['rsi_fast_cross_below_slow'] = ((rsi_df[fast_rsi].shift(1) > rsi_df[slow_rsi].shift(1)) & 
+                                        (rsi_df[fast_rsi] < rsi_df[slow_rsi])).astype(int)
 
     # 7. Momentum y volatilidad del RSI
     for col in rsi_cols:
         # Momentum (cambio en un periodo de lookback)
-        df[f'{col}_momentum'] = df[col] - df[col].shift(lookback)
-        df[f'{col}_pct_momentum'] = df[f'{col}_momentum'] / df[col].shift(lookback).replace(0, np.nan)
+        momentum = rsi_df[col] - rsi_df[col].shift(lookback)
+        new_cols[f'{col}_momentum'] = momentum
+        new_cols[f'{col}_pct_momentum'] = momentum / rsi_df[col].shift(lookback).replace(0, np.nan)
         
         # Volatilidad (desviación estándar móvil)
-        df[f'{col}_volatility'] = df[col].rolling(window=lookback).std()
+        new_cols[f'{col}_volatility'] = rsi_df[col].rolling(window=lookback).std()
 
     # 8. Media móvil del RSI y divergencias
-    df[f'{main_rsi}_ma'] = df[main_rsi].rolling(window=lookback).mean()
+    new_cols[f'{main_rsi}_ma'] = rsi_df[main_rsi].rolling(window=lookback).mean()
     
     # Divergencia: RSI baja mientras precio sube o viceversa
-    df['rsi_price_divergence'] = ((df[close_col].diff(1) > 0) & 
-                                (df[main_rsi].diff(1) < 0) | 
+    new_cols['rsi_price_divergence'] = ((df[close_col].diff(1) > 0) & 
+                                (rsi_df[main_rsi].diff(1) < 0) | 
                                 (df[close_col].diff(1) < 0) & 
-                                (df[main_rsi].diff(1) > 0)).astype(int)
+                                (rsi_df[main_rsi].diff(1) > 0)).astype(int)
     
     # MODIFICADO: Ya no reemplazamos valores NaN automáticamente
     # Permitimos que el usuario decida cómo manejar los NaN posteriormente
     # df.replace([np.inf, -np.inf], np.nan, inplace=True)
     # df.fillna(0, inplace=True)
     
-    return df
+    return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
 
 def evaluar_escenarios_trading(row, pips_objetivo, pips_stop):
@@ -558,6 +577,152 @@ def generate_target_variable(df, pips_objetivo=10, pips_stop=3, future_periods=2
     return df_copy
 
 
+def generate_triple_barrier_targets(
+    df: pd.DataFrame,
+    atr_col: str = 'ATR_14',
+    k_tp: float = 2.5,
+    k_sl: float = 1.0,
+    pips_tp: Optional[float] = None,
+    pips_sl: Optional[float] = None,
+    future_periods: int = 18,
+    spread_pips: float = 1.0,
+    pip_value: float = 0.0001
+) -> pd.DataFrame:
+    """
+    Genera etiquetas basadas en el Metodo Triple Barrier (Marcos Lopez de Prado)
+    incorporando de forma realista volatilidad dinamica (ATR) y friccion de spread/comisiones.
+
+    Barreras:
+      1. Barrera Superior (Take Profit): Entry + (k_tp * ATR) [Compra] o Entry - (k_tp * ATR) [Venta]
+      2. Barrera Inferior (Stop Loss):   Entry - (k_sl * ATR) [Compra] o Entry + (k_sl * ATR) [Venta]
+      3. Barrera Vertical (Tiempo):      future_periods velas (salida por mercado al cierre si no toca barrera)
+
+    Friccion:
+      Aplica una penalizacion de spread realista (spread_pips) a las entradas y salidas para evitar
+      sobreajuste con precios midpoint.
+
+    Retorna DataFrame con:
+      - 'target_buy': 1 si la compra toca el TP antes del SL, 0 de lo contrario.
+      - 'target_sell': 1 si la venta toca el TP antes del SL, 0 de lo contrario.
+      - 'multiclass_target': 'objetivo_compra_alcanzado', 'objetivo_venta_alcanzado', 'no_objetivo_alcanzado', 'undefined'
+      - 'realized_pips_buy': Pips netos obtenidos simulando la operacion de compra con spread.
+      - 'realized_pips_sell': Pips netos obtenidos simulando la operacion de venta con spread.
+    """
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    df_out = df.copy()
+    n = len(df_out)
+    if n <= future_periods:
+        raise ValueError(f"Longitud de DataFrame ({n}) debe ser mayor a future_periods ({future_periods}).")
+
+    required_cols = ['high', 'low', 'close']
+    for col in required_cols:
+        if col not in df_out.columns:
+            raise ValueError(f"Columna requerida '{col}' no encontrada en DataFrame.")
+
+    close = df_out['close'].values.astype(float)
+    high = df_out['high'].values.astype(float)
+    low = df_out['low'].values.astype(float)
+
+    # Determinar distancias de TP y SL
+    if atr_col in df_out.columns and pips_tp is None:
+        atr = df_out[atr_col].values.astype(float)
+        # Reemplazar ceros o NaNs en ATR con un fallback sensato
+        atr_fallback = np.nanmedian(atr) if not np.isnan(np.nanmedian(atr)) else 0.0010
+        atr = np.where(np.isnan(atr) | (atr <= 0), atr_fallback, atr)
+        tp_dist = k_tp * atr
+        sl_dist = k_sl * atr
+    else:
+        p_tp = pips_tp if pips_tp is not None else 25.0
+        p_sl = pips_sl if pips_sl is not None else 10.0
+        tp_dist = np.full(n, p_tp * pip_value)
+        sl_dist = np.full(n, p_sl * pip_value)
+
+    # Penalizacion de medio spread en entrada
+    half_spread = (spread_pips * pip_value) / 2.0
+
+    entry_buy = close + half_spread
+    tp_buy = entry_buy + tp_dist
+    sl_buy = entry_buy - sl_dist
+
+    entry_sell = close - half_spread
+    tp_sell = entry_sell - tp_dist
+    sl_sell = entry_sell + sl_dist
+
+    valid_len = n - future_periods
+    high_future = sliding_window_view(high[1:], window_shape=future_periods)[:valid_len]
+    low_future = sliding_window_view(low[1:], window_shape=future_periods)[:valid_len]
+    close_future = sliding_window_view(close[1:], window_shape=future_periods)[:valid_len]
+
+    # Evaluacion Compra
+    hit_tp_buy = high_future >= tp_buy[:valid_len, None]
+    hit_sl_buy = low_future <= sl_buy[:valid_len, None]
+    first_tp_buy = np.where(hit_tp_buy.any(axis=1), np.argmax(hit_tp_buy, axis=1), 999)
+    first_sl_buy = np.where(hit_sl_buy.any(axis=1), np.argmax(hit_sl_buy, axis=1), 999)
+
+    buy_success = (first_tp_buy < first_sl_buy) & (first_tp_buy < 999)
+    buy_stopped = (first_sl_buy <= first_tp_buy) & (first_sl_buy < 999)
+
+    # Evaluacion Venta
+    hit_tp_sell = low_future <= tp_sell[:valid_len, None]
+    hit_sl_sell = high_future >= sl_sell[:valid_len, None]
+    first_tp_sell = np.where(hit_tp_sell.any(axis=1), np.argmax(hit_tp_sell, axis=1), 999)
+    first_sl_sell = np.where(hit_sl_sell.any(axis=1), np.argmax(hit_sl_sell, axis=1), 999)
+
+    sell_success = (first_tp_sell < first_sl_sell) & (first_tp_sell < 999)
+    sell_stopped = (first_sl_sell <= first_tp_sell) & (first_sl_sell < 999)
+
+    # Calculo de pips netos realizados
+    realized_pips_buy = np.zeros(n)
+    realized_pips_sell = np.zeros(n)
+
+    realized_pips_buy[:valid_len] = np.where(
+        buy_success,
+        (tp_dist[:valid_len] / pip_value),
+        np.where(
+            buy_stopped,
+            -(sl_dist[:valid_len] / pip_value),
+            (close_future[:, -1] - half_spread - entry_buy[:valid_len]) / pip_value
+        )
+    )
+
+    realized_pips_sell[:valid_len] = np.where(
+        sell_success,
+        (tp_dist[:valid_len] / pip_value),
+        np.where(
+            sell_stopped,
+            -(sl_dist[:valid_len] / pip_value),
+            (entry_sell[:valid_len] - (close_future[:, -1] + half_spread)) / pip_value
+        )
+    )
+
+    target_buy = np.zeros(n, dtype=int)
+    target_buy[:valid_len] = buy_success.astype(int)
+
+    target_sell = np.zeros(n, dtype=int)
+    target_sell[:valid_len] = sell_success.astype(int)
+
+    multiclass = np.full(n, 'no_objetivo_alcanzado', dtype=object)
+    multiclass[:valid_len] = np.where(
+        buy_success & ~sell_success,
+        'objetivo_compra_alcanzado',
+        np.where(
+            sell_success & ~buy_success,
+            'objetivo_venta_alcanzado',
+            'no_objetivo_alcanzado'
+        )
+    )
+    multiclass[valid_len:] = 'undefined'
+
+    df_out['target_buy'] = target_buy
+    df_out['target_sell'] = target_sell
+    df_out['multiclass_target'] = multiclass
+    df_out['realized_pips_buy'] = realized_pips_buy
+    df_out['realized_pips_sell'] = realized_pips_sell
+
+    return df_out
+
+
 def get_time_window(df, columns, window=5):
     """
     Construye una matriz de ventanas deslizantes usando sliding_window_view.
@@ -616,14 +781,17 @@ def create_candle_features_vector(df, feature_columns=None, n_candles=4):
             'body_ratio', 'upper_wick_ratio', 'lower_wick_ratio'
         ]
     
-    result_df = df.copy()
+    new_cols = {}
     
     # Para cada característica
     for feature in feature_columns:
         # Para cada desplazamiento (lag) de 1 a n_candles
         for i in range(1, n_candles + 1):
             # Crear nueva columna con el valor desplazado
-            result_df[f'{feature}_lag{i}'] = df[feature].shift(i)
+            new_cols[f'{feature}_lag{i}'] = df[feature].shift(i)
+    
+    # Concatenar todas las nuevas columnas de una vez
+    result_df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
     
     # Opcional: Rellenar NaN con ceros o la media de la columna
     # result_df.fillna(0, inplace=True)
@@ -668,6 +836,8 @@ def bollinger_bands_engineering(df, periods=[20], std_devs=[2.0], close_col='clo
     if len(periods) != len(std_devs):
         raise ValueError("Las listas 'periods' y 'std_devs' deben tener la misma longitud.")
     
+    new_cols = {}
+
     # Crear las Bandas de Bollinger para cada período
     for p, std in zip(periods, std_devs):
         # Nombre base para este conjunto de bandas
@@ -675,69 +845,75 @@ def bollinger_bands_engineering(df, periods=[20], std_devs=[2.0], close_col='clo
         
         # Calcular las Bandas de Bollinger
         # 1. Media móvil
-        df[f"{bb_base}_middle"] = df[close_col].rolling(window=p).mean()
+        middle = df[close_col].rolling(window=p).mean()
+        new_cols[f"{bb_base}_middle"] = middle
         
         # 2. Desviación estándar
         rolling_std = df[close_col].rolling(window=p).std()
         
         # 3. Bandas superior e inferior
-        df[f"{bb_base}_upper"] = df[f"{bb_base}_middle"] + (rolling_std * std)
-        df[f"{bb_base}_lower"] = df[f"{bb_base}_middle"] - (rolling_std * std)
+        upper = middle + (rolling_std * std)
+        lower = middle - (rolling_std * std)
+        new_cols[f"{bb_base}_upper"] = upper
+        new_cols[f"{bb_base}_lower"] = lower
         
         # 4. Porcentaje B (posición relativa entre las bandas, de 0 a 1)
         # %B = (Price - Lower Band) / (Upper Band - Lower Band)
-        band_width = df[f"{bb_base}_upper"] - df[f"{bb_base}_lower"]
-        df[f"{bb_base}_percent_b"] = (df[close_col] - df[f"{bb_base}_lower"]) / band_width.replace(0, np.nan)
+        band_width = upper - lower
+        percent_b = (df[close_col] - lower) / band_width.replace(0, np.nan)
+        new_cols[f"{bb_base}_percent_b"] = percent_b
         
         # 5. Ancho de banda (indicador de volatilidad)
         # Normalizamos por el nivel de precios para comparar entre diferentes activos
-        df[f"{bb_base}_bandwidth"] = band_width / df[f"{bb_base}_middle"]
+        bandwidth = band_width / middle
+        new_cols[f"{bb_base}_bandwidth"] = bandwidth
         
         # 6. Señales de cruce con las bandas
-        df[f"{bb_base}_price_cross_upper"] = ((df[close_col].shift(1) <= df[f"{bb_base}_upper"].shift(1)) & 
-                                             (df[close_col] > df[f"{bb_base}_upper"])).astype(int)
-        df[f"{bb_base}_price_cross_lower"] = ((df[close_col].shift(1) >= df[f"{bb_base}_lower"].shift(1)) & 
-                                             (df[close_col] < df[f"{bb_base}_lower"])).astype(int)
-        df[f"{bb_base}_price_cross_middle"] = ((df[close_col].shift(1) <= df[f"{bb_base}_middle"].shift(1)) & 
-                                              (df[close_col] > df[f"{bb_base}_middle"])).astype(int) - \
-                                             ((df[close_col].shift(1) >= df[f"{bb_base}_middle"].shift(1)) & 
-                                              (df[close_col] < df[f"{bb_base}_middle"])).astype(int)
+        new_cols[f"{bb_base}_price_cross_upper"] = ((df[close_col].shift(1) <= upper.shift(1)) & 
+                                             (df[close_col] > upper)).astype(int)
+        new_cols[f"{bb_base}_price_cross_lower"] = ((df[close_col].shift(1) >= lower.shift(1)) & 
+                                             (df[close_col] < lower)).astype(int)
+        new_cols[f"{bb_base}_price_cross_middle"] = ((df[close_col].shift(1) <= middle.shift(1)) & 
+                                              (df[close_col] > middle)).astype(int) - \
+                                             ((df[close_col].shift(1) >= middle.shift(1)) & 
+                                              (df[close_col] < middle)).astype(int)
         
         # 7. Tendencia de la media móvil (banda central)
-        df[f"{bb_base}_middle_slope"] = df[f"{bb_base}_middle"].diff(1)
-        df[f"{bb_base}_middle_slope_mean"] = df[f"{bb_base}_middle_slope"].rolling(lookback).mean()
+        middle_slope = middle.diff(1)
+        new_cols[f"{bb_base}_middle_slope"] = middle_slope
+        new_cols[f"{bb_base}_middle_slope_mean"] = middle_slope.rolling(lookback).mean()
         
         # 8. Contracción/expansión de bandas (cambio en ancho de banda)
-        df[f"{bb_base}_bandwidth_change"] = df[f"{bb_base}_bandwidth"].pct_change(1)
-        df[f"{bb_base}_squeeze"] = df[f"{bb_base}_bandwidth"] < df[f"{bb_base}_bandwidth"].rolling(lookback*2).mean()
-        df[f"{bb_base}_squeeze"] = df[f"{bb_base}_squeeze"].astype(int)
+        new_cols[f"{bb_base}_bandwidth_change"] = bandwidth.pct_change(1)
+        squeeze = bandwidth < bandwidth.rolling(lookback*2).mean()
+        new_cols[f"{bb_base}_squeeze"] = squeeze.astype(int)
         
         # 9. Momentum relativo a las bandas
-        df[f"{bb_base}_percent_b_change"] = df[f"{bb_base}_percent_b"].diff(1)
-        df[f"{bb_base}_percent_b_slope"] = df[f"{bb_base}_percent_b"].diff(1).rolling(lookback).mean()
+        new_cols[f"{bb_base}_percent_b_change"] = percent_b.diff(1)
+        new_cols[f"{bb_base}_percent_b_slope"] = percent_b.diff(1).rolling(lookback).mean()
         
         # 10. Distancia a bandas en pips
-        df[f"{bb_base}_dist_upper_pips"] = (df[f"{bb_base}_upper"] - df[close_col]) * 10000
-        df[f"{bb_base}_dist_lower_pips"] = (df[close_col] - df[f"{bb_base}_lower"]) * 10000
-        df[f"{bb_base}_dist_middle_pips"] = abs(df[close_col] - df[f"{bb_base}_middle"]) * 10000
+        new_cols[f"{bb_base}_dist_upper_pips"] = (upper - df[close_col]) * 10000
+        new_cols[f"{bb_base}_dist_lower_pips"] = (df[close_col] - lower) * 10000
+        new_cols[f"{bb_base}_dist_middle_pips"] = abs(df[close_col] - middle) * 10000
         
         # 11. Momentum vs Bandas (divergencia)
         price_momentum = df[close_col].diff(lookback)
-        df[f"{bb_base}_divergence"] = ((price_momentum > 0) & (df[f"{bb_base}_middle_slope"] < 0)) | \
-                                     ((price_momentum < 0) & (df[f"{bb_base}_middle_slope"] > 0))
-        df[f"{bb_base}_divergence"] = df[f"{bb_base}_divergence"].astype(int)
+        divergence = ((price_momentum > 0) & (middle_slope < 0)) | \
+                                     ((price_momentum < 0) & (middle_slope > 0))
+        new_cols[f"{bb_base}_divergence"] = divergence.astype(int)
         
         # 12. Rebote desde bandas (posible señal de reversión)
-        df[f"{bb_base}_bounce_upper"] = ((df[close_col].shift(1) >= df[f"{bb_base}_upper"].shift(1)) & 
+        new_cols[f"{bb_base}_bounce_upper"] = ((df[close_col].shift(1) >= upper.shift(1)) & 
                                         (df[close_col] < df[close_col].shift(1))).astype(int)
-        df[f"{bb_base}_bounce_lower"] = ((df[close_col].shift(1) <= df[f"{bb_base}_lower"].shift(1)) & 
+        new_cols[f"{bb_base}_bounce_lower"] = ((df[close_col].shift(1) <= lower.shift(1)) & 
                                         (df[close_col] > df[close_col].shift(1))).astype(int)
     
     # MODIFICADO: Ya no eliminamos filas con NaN
     # df.replace([np.inf, -np.inf], np.nan, inplace=True)
     # df.fillna(0, inplace=True)
     
-    return df
+    return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
 
 def stochastic_engineering(df, k_periods=[14], d_periods=[3], lookback=5, slow=True):
@@ -779,6 +955,7 @@ def stochastic_engineering(df, k_periods=[14], d_periods=[3], lookback=5, slow=T
             raise ValueError(f"La columna {col} no existe en el DataFrame.")
     
     stoch_cols = []
+    new_cols = {}
     
     # Calcular el Estocástico para cada combinación de periodos
     for k_period in k_periods:
@@ -787,109 +964,110 @@ def stochastic_engineering(df, k_periods=[14], d_periods=[3], lookback=5, slow=T
             base_name = f"STOCH_{k_period}_{d_period}"
             
             # Calcular el rango más alto y más bajo durante el periodo k_period
-            df[f"{base_name}_highest_high"] = df['high'].rolling(window=k_period).max()
-            df[f"{base_name}_lowest_low"] = df['low'].rolling(window=k_period).min()
+            highest_high = df['high'].rolling(window=k_period).max()
+            lowest_low = df['low'].rolling(window=k_period).min()
             
             # Calcular %K (estocástico rápido)
-            df[f"{base_name}_K_fast"] = ((df['close'] - df[f"{base_name}_lowest_low"]) / 
-                                         (df[f"{base_name}_highest_high"] - df[f"{base_name}_lowest_low"] + 1e-10)) * 100
+            k_fast = ((df['close'] - lowest_low) / 
+                                         (highest_high - lowest_low + 1e-10)) * 100
             
             # Calcular %D (media móvil de %K)
-            df[f"{base_name}_D_fast"] = df[f"{base_name}_K_fast"].rolling(window=d_period).mean()
+            d_fast = k_fast.rolling(window=d_period).mean()
             
             # Si se solicita el estocástico lento
             if slow:
-                df[f"{base_name}_K"] = df[f"{base_name}_D_fast"]  # K lento es igual a D rápido
-                df[f"{base_name}_D"] = df[f"{base_name}_K"].rolling(window=d_period).mean()  # D lento es SMA de K lento
+                k_series = d_fast  # K lento es igual a D rápido
+                d_series = k_series.rolling(window=d_period).mean()  # D lento es SMA de K lento
             else:
-                df[f"{base_name}_K"] = df[f"{base_name}_K_fast"]  # K rápido
-                df[f"{base_name}_D"] = df[f"{base_name}_D_fast"]  # D rápido
+                k_series = k_fast  # K rápido
+                d_series = d_fast  # D rápido
+            
+            new_cols[f"{base_name}_K"] = k_series
+            new_cols[f"{base_name}_D"] = d_series
                 
             # Guardar los nombres de columnas para el procesamiento posterior
             k_col = f"{base_name}_K"
             d_col = f"{base_name}_D"
             stoch_cols.append((k_col, d_col))
             
-            # Eliminar columnas intermedias para no sobrecargar el DataFrame
-            df = df.drop(columns=[f"{base_name}_highest_high", f"{base_name}_lowest_low",
-                                 f"{base_name}_K_fast", f"{base_name}_D_fast"], errors='ignore')
-            
             # 1. Estados del estocástico (indicadores binarios)
-            df[f"{base_name}_extreme_overbought"] = (df[k_col] > 90).astype(int)
-            df[f"{base_name}_overbought"] = ((df[k_col] <= 90) & (df[k_col] > 80)).astype(int)
-            df[f"{base_name}_strong"] = ((df[k_col] <= 80) & (df[k_col] > 60)).astype(int)
-            df[f"{base_name}_neutral_high"] = ((df[k_col] <= 60) & (df[k_col] > 50)).astype(int)
-            df[f"{base_name}_neutral_low"] = ((df[k_col] <= 50) & (df[k_col] > 40)).astype(int)
-            df[f"{base_name}_weak"] = ((df[k_col] <= 40) & (df[k_col] > 20)).astype(int)
-            df[f"{base_name}_oversold"] = ((df[k_col] <= 20) & (df[k_col] > 10)).astype(int)
-            df[f"{base_name}_extreme_oversold"] = (df[k_col] <= 10).astype(int)
+            new_cols[f"{base_name}_extreme_overbought"] = (k_series > 90).astype(int)
+            new_cols[f"{base_name}_overbought"] = ((k_series <= 90) & (k_series > 80)).astype(int)
+            new_cols[f"{base_name}_strong"] = ((k_series <= 80) & (k_series > 60)).astype(int)
+            new_cols[f"{base_name}_neutral_high"] = ((k_series <= 60) & (k_series > 50)).astype(int)
+            new_cols[f"{base_name}_neutral_low"] = ((k_series <= 50) & (k_series > 40)).astype(int)
+            new_cols[f"{base_name}_weak"] = ((k_series <= 40) & (k_series > 20)).astype(int)
+            new_cols[f"{base_name}_oversold"] = ((k_series <= 20) & (k_series > 10)).astype(int)
+            new_cols[f"{base_name}_extreme_oversold"] = (k_series <= 10).astype(int)
             
             # 2. Distancias a niveles clave
-            df[f"{base_name}_dist_to_80"] = df[k_col] - 80
-            df[f"{base_name}_dist_to_50"] = df[k_col] - 50
-            df[f"{base_name}_dist_to_20"] = df[k_col] - 20
+            new_cols[f"{base_name}_dist_to_80"] = k_series - 80
+            new_cols[f"{base_name}_dist_to_50"] = k_series - 50
+            new_cols[f"{base_name}_dist_to_20"] = k_series - 20
             
             # 3. Pendientes y aceleraciones
-            df[f"{base_name}_K_slope"] = df[k_col].diff(1)
-            df[f"{base_name}_D_slope"] = df[d_col].diff(1)
-            df[f"{base_name}_K_slope_mean"] = df[f"{base_name}_K_slope"].rolling(window=lookback).mean()
-            df[f"{base_name}_D_slope_mean"] = df[f"{base_name}_D_slope"].rolling(window=lookback).mean()
-            df[f"{base_name}_K_acceleration"] = df[f"{base_name}_K_slope"].diff(1)
-            df[f"{base_name}_D_acceleration"] = df[f"{base_name}_D_slope"].diff(1)
+            k_slope = k_series.diff(1)
+            d_slope = d_series.diff(1)
+            new_cols[f"{base_name}_K_slope"] = k_slope
+            new_cols[f"{base_name}_D_slope"] = d_slope
+            new_cols[f"{base_name}_K_slope_mean"] = k_slope.rolling(window=lookback).mean()
+            new_cols[f"{base_name}_D_slope_mean"] = d_slope.rolling(window=lookback).mean()
+            new_cols[f"{base_name}_K_acceleration"] = k_slope.diff(1)
+            new_cols[f"{base_name}_D_acceleration"] = d_slope.diff(1)
             
             # 4. Señales de cruce
-            df[f"{base_name}_K_cross_D_up"] = ((df[k_col].shift(1) < df[d_col].shift(1)) & 
-                                              (df[k_col] > df[d_col])).astype(int)
-            df[f"{base_name}_K_cross_D_down"] = ((df[k_col].shift(1) > df[d_col].shift(1)) & 
-                                                (df[k_col] < df[d_col])).astype(int)
+            new_cols[f"{base_name}_K_cross_D_up"] = ((k_series.shift(1) < d_series.shift(1)) & 
+                                              (k_series > d_series)).astype(int)
+            new_cols[f"{base_name}_K_cross_D_down"] = ((k_series.shift(1) > d_series.shift(1)) & 
+                                                (k_series < d_series)).astype(int)
             
-            df[f"{base_name}_cross_20_up"] = ((df[k_col].shift(1) < 20) & (df[k_col] > 20)).astype(int)
-            df[f"{base_name}_cross_80_down"] = ((df[k_col].shift(1) > 80) & (df[k_col] < 80)).astype(int)
+            new_cols[f"{base_name}_cross_20_up"] = ((k_series.shift(1) < 20) & (k_series > 20)).astype(int)
+            new_cols[f"{base_name}_cross_80_down"] = ((k_series.shift(1) > 80) & (k_series < 80)).astype(int)
             
             # 5. Volatilidad y momentum
-            df[f"{base_name}_K_volatility"] = df[k_col].rolling(window=lookback).std()
-            df[f"{base_name}_K_momentum"] = df[k_col] - df[k_col].shift(lookback)
-            df[f"{base_name}_K_rate_of_change"] = (df[k_col] / df[k_col].shift(lookback) - 1) * 100
+            new_cols[f"{base_name}_K_volatility"] = k_series.rolling(window=lookback).std()
+            new_cols[f"{base_name}_K_momentum"] = k_series - k_series.shift(lookback)
+            new_cols[f"{base_name}_K_rate_of_change"] = (k_series / k_series.shift(lookback) - 1) * 100
             
             # 6. Relación entre K y D
-            df[f"{base_name}_K_minus_D"] = df[k_col] - df[d_col]
-            df[f"{base_name}_KD_ratio"] = df[k_col] / df[d_col].replace(0, np.nan)
+            new_cols[f"{base_name}_K_minus_D"] = k_series - d_series
+            new_cols[f"{base_name}_KD_ratio"] = k_series / d_series.replace(0, np.nan)
             
             # 7. Diferencia de velocidades entre K y D
-            df[f"{base_name}_K_D_velocity_diff"] = df[f"{base_name}_K_slope"] - df[f"{base_name}_D_slope"]
+            new_cols[f"{base_name}_K_D_velocity_diff"] = k_slope - d_slope
             
             # 8. Convergencia/Divergencia entre K y D
-            df[f"{base_name}_KD_convergence"] = -abs(df[k_col] - df[d_col]).diff(1)
-            df[f"{base_name}_KD_divergence"] = abs(df[k_col] - df[d_col]).diff(1)
+            new_cols[f"{base_name}_KD_convergence"] = -abs(k_series - d_series).diff(1)
+            new_cols[f"{base_name}_KD_divergence"] = abs(k_series - d_series).diff(1)
             
             # 9. Divergencias precio-indicador
-            df[f"{base_name}_bullish_divergence"] = ((df['close'].diff(lookback) < 0) & 
-                                                    (df[k_col].diff(lookback) > 0) & 
-                                                    (df[k_col] < 30)).astype(int)
+            new_cols[f"{base_name}_bullish_divergence"] = ((df['close'].diff(lookback) < 0) & 
+                                                    (k_series.diff(lookback) > 0) & 
+                                                    (k_series < 30)).astype(int)
             
-            df[f"{base_name}_bearish_divergence"] = ((df['close'].diff(lookback) > 0) & 
-                                                    (df[k_col].diff(lookback) < 0) & 
-                                                    (df[k_col] > 70)).astype(int)
+            new_cols[f"{base_name}_bearish_divergence"] = ((df['close'].diff(lookback) > 0) & 
+                                                    (k_series.diff(lookback) < 0) & 
+                                                    (k_series > 70)).astype(int)
             
             # 10. Patrones estocásticos
-            df[f"{base_name}_peak_formation"] = ((df[k_col].shift(2) < df[k_col].shift(1)) & 
-                                                (df[k_col].shift(1) > df[k_col]) & 
-                                                (df[k_col].shift(1) > 75)).astype(int)
+            new_cols[f"{base_name}_peak_formation"] = ((k_series.shift(2) < k_series.shift(1)) & 
+                                                (k_series.shift(1) > k_series) & 
+                                                (k_series.shift(1) > 75)).astype(int)
             
-            df[f"{base_name}_valley_formation"] = ((df[k_col].shift(2) > df[k_col].shift(1)) & 
-                                                 (df[k_col].shift(1) < df[k_col]) & 
-                                                 (df[k_col].shift(1) < 25)).astype(int)
+            new_cols[f"{base_name}_valley_formation"] = ((k_series.shift(2) > k_series.shift(1)) & 
+                                                 (k_series.shift(1) < k_series) & 
+                                                 (k_series.shift(1) < 25)).astype(int)
             
             # 11. Indicador compuesto (combinación de varias señales)
-            buy_signal = (df[f"{base_name}_K_cross_D_up"] & (df[k_col] < 40)).astype(int)
-            sell_signal = (df[f"{base_name}_K_cross_D_down"] & (df[k_col] > 60)).astype(int)
-            df[f"{base_name}_signal_combined"] = buy_signal - sell_signal
+            buy_signal = (new_cols[f"{base_name}_K_cross_D_up"] & (k_series < 40)).astype(int)
+            sell_signal = (new_cols[f"{base_name}_K_cross_D_down"] & (k_series > 60)).astype(int)
+            new_cols[f"{base_name}_signal_combined"] = buy_signal - sell_signal
     
     # Reemplazar valores infinitos y NaN
     #df.replace([np.inf, -np.inf], np.nan, inplace=True)
     #df.fillna(0, inplace=True)
     
-    return df
+    return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
 
 def macd_engineering(df, fast_periods=[12], slow_periods=[26], signal_periods=[9], close_col='close', lookback=5):
@@ -931,6 +1109,7 @@ def macd_engineering(df, fast_periods=[12], slow_periods=[26], signal_periods=[9
         raise ValueError(f"La columna {close_col} no existe en el DataFrame.")
     
     # Calcular MACD para cada combinación de periodos
+    new_cols = {}
     for fast in fast_periods:
         for slow in slow_periods:
             for signal in signal_periods:
@@ -946,94 +1125,99 @@ def macd_engineering(df, fast_periods=[12], slow_periods=[26], signal_periods=[9
                 slow_ema = df[close_col].ewm(span=slow, adjust=False).mean()
                 
                 # 2. Calcular MACD Line
-                df[f"{base_name}_line"] = fast_ema - slow_ema
+                macd_line = fast_ema - slow_ema
+                new_cols[f"{base_name}_line"] = macd_line
                 
                 # 3. Calcular Signal Line (EMA del MACD)
-                df[f"{base_name}_signal"] = df[f"{base_name}_line"].ewm(span=signal, adjust=False).mean()
+                signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+                new_cols[f"{base_name}_signal"] = signal_line
                 
                 # 4. Calcular Histograma (MACD - Signal)
-                df[f"{base_name}_histogram"] = df[f"{base_name}_line"] - df[f"{base_name}_signal"]
+                histogram = macd_line - signal_line
+                new_cols[f"{base_name}_histogram"] = histogram
                 
                 # 5. Estados del MACD
-                df[f"{base_name}_is_positive"] = (df[f"{base_name}_line"] > 0).astype(int)
-                df[f"{base_name}_is_above_signal"] = (df[f"{base_name}_line"] > df[f"{base_name}_signal"]).astype(int)
-                df[f"{base_name}_histogram_positive"] = (df[f"{base_name}_histogram"] > 0).astype(int)
+                new_cols[f"{base_name}_is_positive"] = (macd_line > 0).astype(int)
+                new_cols[f"{base_name}_is_above_signal"] = (macd_line > signal_line).astype(int)
+                new_cols[f"{base_name}_histogram_positive"] = (histogram > 0).astype(int)
                 
                 # 6. Cruces de líneas
-                df[f"{base_name}_cross_above_signal"] = ((df[f"{base_name}_line"].shift(1) <= df[f"{base_name}_signal"].shift(1)) & 
-                                                        (df[f"{base_name}_line"] > df[f"{base_name}_signal"])).astype(int)
-                df[f"{base_name}_cross_below_signal"] = ((df[f"{base_name}_line"].shift(1) >= df[f"{base_name}_signal"].shift(1)) & 
-                                                        (df[f"{base_name}_line"] < df[f"{base_name}_signal"])).astype(int)
-                df[f"{base_name}_cross_zero_up"] = ((df[f"{base_name}_line"].shift(1) <= 0) & 
-                                                   (df[f"{base_name}_line"] > 0)).astype(int)
-                df[f"{base_name}_cross_zero_down"] = ((df[f"{base_name}_line"].shift(1) >= 0) & 
-                                                    (df[f"{base_name}_line"] < 0)).astype(int)
+                new_cols[f"{base_name}_cross_above_signal"] = ((macd_line.shift(1) <= signal_line.shift(1)) & 
+                                                        (macd_line > signal_line)).astype(int)
+                new_cols[f"{base_name}_cross_below_signal"] = ((macd_line.shift(1) >= signal_line.shift(1)) & 
+                                                        (macd_line < signal_line)).astype(int)
+                new_cols[f"{base_name}_cross_zero_up"] = ((macd_line.shift(1) <= 0) & 
+                                                   (macd_line > 0)).astype(int)
+                new_cols[f"{base_name}_cross_zero_down"] = ((macd_line.shift(1) >= 0) & 
+                                                    (macd_line < 0)).astype(int)
                 
                 # 7. Pendientes y aceleraciones
-                df[f"{base_name}_line_slope"] = df[f"{base_name}_line"].diff(1)
-                df[f"{base_name}_signal_slope"] = df[f"{base_name}_signal"].diff(1)
-                df[f"{base_name}_histogram_slope"] = df[f"{base_name}_histogram"].diff(1)
+                line_slope = macd_line.diff(1)
+                new_cols[f"{base_name}_line_slope"] = line_slope
+                new_cols[f"{base_name}_signal_slope"] = signal_line.diff(1)
+                histogram_slope = histogram.diff(1)
+                new_cols[f"{base_name}_histogram_slope"] = histogram_slope
                 
-                df[f"{base_name}_line_acceleration"] = df[f"{base_name}_line_slope"].diff(1)
-                df[f"{base_name}_histogram_acceleration"] = df[f"{base_name}_histogram_slope"].diff(1)
+                new_cols[f"{base_name}_line_acceleration"] = line_slope.diff(1)
+                new_cols[f"{base_name}_histogram_acceleration"] = histogram_slope.diff(1)
                 
                 # 8. Cambios en el signo del histograma (cambio de momentum)
-                df[f"{base_name}_histogram_sign_change"] = (np.sign(df[f"{base_name}_histogram"]) != 
-                                                           np.sign(df[f"{base_name}_histogram"].shift(1))).astype(int)
+                new_cols[f"{base_name}_histogram_sign_change"] = (np.sign(histogram) != 
+                                                           np.sign(histogram.shift(1))).astype(int)
                 
                 # 9. Divergencias
                 # Bullish divergence: precio hace mínimos más bajos pero MACD hace mínimos más altos
-                df[f"{base_name}_bullish_divergence"] = (
+                new_cols[f"{base_name}_bullish_divergence"] = (
                     (df[close_col] < df[close_col].shift(lookback)) &  # Precio bajando
-                    (df[f"{base_name}_line"] > df[f"{base_name}_line"].shift(lookback)) &  # MACD subiendo
-                    (df[f"{base_name}_line"] < 0)  # MACD negativo
+                    (macd_line > macd_line.shift(lookback)) &  # MACD subiendo
+                    (macd_line < 0)  # MACD negativo
                 ).astype(int)
                 
                 # Bearish divergence: precio hace máximos más altos pero MACD hace máximos más bajos
-                df[f"{base_name}_bearish_divergence"] = (
+                new_cols[f"{base_name}_bearish_divergence"] = (
                     (df[close_col] > df[close_col].shift(lookback)) &  # Precio subiendo
-                    (df[f"{base_name}_line"] < df[f"{base_name}_line"].shift(lookback)) &  # MACD bajando
-                    (df[f"{base_name}_line"] > 0)  # MACD positivo
+                    (macd_line < macd_line.shift(lookback)) &  # MACD bajando
+                    (macd_line > 0)  # MACD positivo
                 ).astype(int)
                 
                 # 10. Medidas de tendencia
-                df[f"{base_name}_trend_strength"] = abs(df[f"{base_name}_line"]) / df[f"{base_name}_line"].rolling(window=slow).std()
-                df[f"{base_name}_line_mean"] = df[f"{base_name}_line"].rolling(window=lookback).mean()
+                new_cols[f"{base_name}_trend_strength"] = abs(macd_line) / macd_line.rolling(window=slow).std()
+                new_cols[f"{base_name}_line_mean"] = macd_line.rolling(window=lookback).mean()
                 
                 # 11. Patrones del histograma
                 # Histograma creciendo mientras está en negativo (posible cambio de tendencia alcista)
-                df[f"{base_name}_growing_histogram_below_zero"] = (
-                    (df[f"{base_name}_histogram"] < 0) &
-                    (df[f"{base_name}_histogram"] > df[f"{base_name}_histogram"].shift(1)) &
-                    (df[f"{base_name}_histogram"].shift(1) > df[f"{base_name}_histogram"].shift(2))
+                new_cols[f"{base_name}_growing_histogram_below_zero"] = (
+                    (histogram < 0) &
+                    (histogram > histogram.shift(1)) &
+                    (histogram.shift(1) > histogram.shift(2))
                 ).astype(int)
                 
                 # Histograma decreciendo mientras está en positivo (posible cambio de tendencia bajista)
-                df[f"{base_name}_shrinking_histogram_above_zero"] = (
-                    (df[f"{base_name}_histogram"] > 0) &
-                    (df[f"{base_name}_histogram"] < df[f"{base_name}_histogram"].shift(1)) &
-                    (df[f"{base_name}_histogram"].shift(1) < df[f"{base_name}_histogram"].shift(2))
+                new_cols[f"{base_name}_shrinking_histogram_above_zero"] = (
+                    (histogram > 0) &
+                    (histogram < histogram.shift(1)) &
+                    (histogram.shift(1) < histogram.shift(2))
                 ).astype(int)
                 
                 # 12. Señales combinadas
-                df[f"{base_name}_buy_signal"] = (
-                    df[f"{base_name}_cross_above_signal"] & 
-                    (df[f"{base_name}_line"] < 0)  # Cruce desde abajo mientras MACD es negativo
+                new_cols[f"{base_name}_buy_signal"] = (
+                    new_cols[f"{base_name}_cross_above_signal"] & 
+                    (macd_line < 0)  # Cruce desde abajo mientras MACD es negativo
                 ).astype(int)
                 
-                df[f"{base_name}_sell_signal"] = (
-                    df[f"{base_name}_cross_below_signal"] & 
-                    (df[f"{base_name}_line"] > 0)  # Cruce desde arriba mientras MACD es positivo
+                new_cols[f"{base_name}_sell_signal"] = (
+                    new_cols[f"{base_name}_cross_below_signal"] & 
+                    (macd_line > 0)  # Cruce desde arriba mientras MACD es positivo
                 ).astype(int)
                 
                 # 13. Volatilidad del MACD
-                df[f"{base_name}_volatility"] = df[f"{base_name}_line"].rolling(window=lookback).std()
+                new_cols[f"{base_name}_volatility"] = macd_line.rolling(window=lookback).std()
     
     # Reemplazar valores infinitos y NaN
     #df.replace([np.inf, -np.inf], np.nan, inplace=True)
     #df.fillna(0, inplace=True)
     
-    return df
+    return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
 
 def atr_engineering(df, periods=[14], lookback=5):
@@ -1076,76 +1260,82 @@ def atr_engineering(df, periods=[14], lookback=5):
     low_close_prev = abs(df['low'] - df['close'].shift(1))
     
     # True Range es el máximo de los tres valores
-    df['true_range'] = pd.concat([high_low, high_close_prev, low_close_prev], axis=1).max(axis=1)
+    true_range = pd.concat([high_low, high_close_prev, low_close_prev], axis=1).max(axis=1)
     
+    new_cols = {}
+
     # 2. Calcular ATR para cada periodo
     for period in periods:
         base_name = f"ATR_{period}"
         
         # ATR - se puede usar SMA o EMA, el original de Wilder usa EMA con alpha=1/period
-        df[base_name] = df['true_range'].ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+        atr = true_range.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+        new_cols[base_name] = atr
         
         # 3. ATR normalizado (como porcentaje del precio)
-        df[f"{base_name}_pct"] = (df[base_name] / df['close']) * 100
+        new_cols[f"{base_name}_pct"] = (atr / df['close']) * 100
         
         # 4. Volatilidad relativa (comparada con la volatilidad histórica)
-        df[f"{base_name}_relative"] = df[base_name] / df[base_name].rolling(window=period*3).mean()
+        new_cols[f"{base_name}_relative"] = atr / atr.rolling(window=period*3).mean()
         
         # 5. Cambios en ATR
-        df[f"{base_name}_change"] = df[base_name].pct_change()
-        df[f"{base_name}_change_5d"] = df[base_name] / df[base_name].shift(lookback) - 1
+        new_cols[f"{base_name}_change"] = atr.pct_change()
+        new_cols[f"{base_name}_change_5d"] = atr / atr.shift(lookback) - 1
         
         # 6. Volatilidad del ATR
-        df[f"{base_name}_volatility"] = df[base_name].rolling(window=lookback).std() / df[base_name].rolling(window=lookback).mean()
+        new_cols[f"{base_name}_volatility"] = atr.rolling(window=lookback).std() / atr.rolling(window=lookback).mean()
         
         # 7. Identificación de alta/baja volatilidad basada en percentiles
         rolling_window = max(period * 5, 50)  # Ventana para percentiles históricos
-        df[f"{base_name}_percentile"] = df[base_name].rolling(rolling_window).apply(
+        percentile = atr.rolling(rolling_window).apply(
             lambda x: pd.Series(x).rank(pct=True).iloc[-1] * 100, raw=True)
+        new_cols[f"{base_name}_percentile"] = percentile
         
-        df[f"{base_name}_high_volatility"] = (df[f"{base_name}_percentile"] > 80).astype(int)
-        df[f"{base_name}_low_volatility"] = (df[f"{base_name}_percentile"] < 20).astype(int)
+        new_cols[f"{base_name}_high_volatility"] = (percentile > 80).astype(int)
+        new_cols[f"{base_name}_low_volatility"] = (percentile < 20).astype(int)
         
         # 8. Bandas de volatilidad (similar a bandas de Bollinger pero basadas en ATR)
-        df[f"{base_name}_upper_band"] = df['close'] + df[base_name] * 2
-        df[f"{base_name}_lower_band"] = df['close'] - df[base_name] * 2
+        new_cols[f"{base_name}_upper_band"] = df['close'] + atr * 2
+        new_cols[f"{base_name}_lower_band"] = df['close'] - atr * 2
         
         # 9. Bandas estrechas (señal de posible movimiento explosivo)
-        df[f"{base_name}_squeeze"] = (df[base_name] < df[base_name].rolling(window=period*2).quantile(0.2)).astype(int)
+        squeeze = (atr < atr.rolling(window=period*2).quantile(0.2)).astype(int)
+        new_cols[f"{base_name}_squeeze"] = squeeze
         
         # 10. Expansión y contracción de volatilidad
-        df[f"{base_name}_expansion"] = ((df[base_name] > df[base_name].shift(1)) & 
-                                       (df[base_name].shift(1) > df[base_name].shift(2))).astype(int)
+        expansion = ((atr > atr.shift(1)) & 
+                                       (atr.shift(1) > atr.shift(2))).astype(int)
+        new_cols[f"{base_name}_expansion"] = expansion
         
-        df[f"{base_name}_contraction"] = ((df[base_name] < df[base_name].shift(1)) & 
-                                         (df[base_name].shift(1) < df[base_name].shift(2))).astype(int)
+        new_cols[f"{base_name}_contraction"] = ((atr < atr.shift(1)) & 
+                                         (atr.shift(1) < atr.shift(2))).astype(int)
         
         # 11. Identificación de fin de tendencia (volatilidad en expansión después de un periodo de contracción)
-        df[f"{base_name}_volatility_breakout"] = ((df[f"{base_name}_expansion"] == 1) & 
-                                                 (df[f"{base_name}_squeeze"].shift(1) == 1)).astype(int)
+        new_cols[f"{base_name}_volatility_breakout"] = ((expansion == 1) & 
+                                                 (squeeze.shift(1) == 1)).astype(int)
         
         # 12. Relación precio/volatilidad (ADR - Average Daily Range)
-        df[f"{base_name}_range_to_atr"] = high_low / df[base_name]
+        new_cols[f"{base_name}_range_to_atr"] = high_low / atr
         
         # 13. Tendencia de ATR
-        df[f"{base_name}_trend"] = np.where(
-            df[base_name] > df[base_name].shift(lookback), 
+        new_cols[f"{base_name}_trend"] = np.where(
+            atr > atr.shift(lookback), 
             1,  # ATR creciente (volatilidad aumentando)
             np.where(
-                df[base_name] < df[base_name].shift(lookback),
+                atr < atr.shift(lookback),
                 -1,  # ATR decreciente (volatilidad disminuyendo)
                 0    # ATR estable
             )
         )
     
     # Eliminar columna temporal de true_range
-    df = df.drop(columns=['true_range'], errors='ignore')
+    # df = df.drop(columns=['true_range'], errors='ignore') # No longer needed as we didn't add it
     
     # Reemplazar valores infinitos y NaN
     #df.replace([np.inf, -np.inf], np.nan, inplace=True)
     #df.fillna(0, inplace=True)
     
-    return df
+    return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
 
 def adx_engineering(df, periods=[14], lookback=5):
@@ -1183,6 +1373,7 @@ def adx_engineering(df, periods=[14], lookback=5):
             raise ValueError(f"La columna {col} no existe en el DataFrame.")
     
     # Para cada periodo, calcular ADX y características derivadas
+    new_cols = {}
     for period in periods:
         base_name = f"ADX_{period}"
         
@@ -1221,6 +1412,11 @@ def adx_engineering(df, periods=[14], lookback=5):
         plus_dm_smoothed = plus_dm_period.copy()
         minus_dm_smoothed = minus_dm_period.copy()
         
+        # Nota: El bucle para el suavizado de Wilder es lento en Python puro, 
+        # pero mantenemos la lógica original. Se podría optimizar con ewm.
+        # Aproximación usando ewm (comentada para mantener fidelidad):
+        # tr_smoothed = true_range.ewm(alpha=1/period, adjust=False).mean() * period
+        
         for i in range(period, len(df)):
             tr_smoothed.iloc[i] = tr_smoothed.iloc[i-1] - (tr_smoothed.iloc[i-1] / period) + true_range.iloc[i]
             plus_dm_smoothed.iloc[i] = plus_dm_smoothed.iloc[i-1] - (plus_dm_smoothed.iloc[i-1] / period) + plus_dm[i]
@@ -1237,75 +1433,76 @@ def adx_engineering(df, periods=[14], lookback=5):
         adx = dx.rolling(window=period).mean()
         
         # Guardar valores principales
-        df[f"{base_name}_plus_di"] = plus_di
-        df[f"{base_name}_minus_di"] = minus_di
-        df[f"{base_name}"] = adx
+        new_cols[f"{base_name}_plus_di"] = plus_di
+        new_cols[f"{base_name}_minus_di"] = minus_di
+        new_cols[f"{base_name}"] = adx
         
         # 7. Fuerza de la tendencia basada en ADX
-        df[f"{base_name}_weak_trend"] = (adx < 25).astype(int)
-        df[f"{base_name}_moderate_trend"] = ((adx >= 25) & (adx < 50)).astype(int)
-        df[f"{base_name}_strong_trend"] = ((adx >= 50) & (adx < 75)).astype(int)
-        df[f"{base_name}_extreme_trend"] = (adx >= 75).astype(int)
+        new_cols[f"{base_name}_weak_trend"] = (adx < 25).astype(int)
+        new_cols[f"{base_name}_moderate_trend"] = ((adx >= 25) & (adx < 50)).astype(int)
+        new_cols[f"{base_name}_strong_trend"] = ((adx >= 50) & (adx < 75)).astype(int)
+        new_cols[f"{base_name}_extreme_trend"] = (adx >= 75).astype(int)
         
         # 8. Dirección de la tendencia
-        df[f"{base_name}_bullish"] = (plus_di > minus_di).astype(int)
-        df[f"{base_name}_bearish"] = (minus_di > plus_di).astype(int)
+        new_cols[f"{base_name}_bullish"] = (plus_di > minus_di).astype(int)
+        new_cols[f"{base_name}_bearish"] = (minus_di > plus_di).astype(int)
         
         # 9. Señales de entrada
-        df[f"{base_name}_buy_signal"] = ((plus_di > minus_di) & 
+        new_cols[f"{base_name}_buy_signal"] = ((plus_di > minus_di) & 
                                         (plus_di.shift(1) <= minus_di.shift(1)) & 
                                         (adx > 25)).astype(int)
         
-        df[f"{base_name}_sell_signal"] = ((minus_di > plus_di) & 
+        new_cols[f"{base_name}_sell_signal"] = ((minus_di > plus_di) & 
                                          (minus_di.shift(1) <= plus_di.shift(1)) & 
                                          (adx > 25)).astype(int)
         
         # 10. Divergencias
-        df[f"{base_name}_adx_rising"] = (adx > adx.shift(1)).astype(int)
-        df[f"{base_name}_adx_falling"] = (adx < adx.shift(1)).astype(int)
+        new_cols[f"{base_name}_adx_rising"] = (adx > adx.shift(1)).astype(int)
+        new_cols[f"{base_name}_adx_falling"] = (adx < adx.shift(1)).astype(int)
         
         # 11. Cruces de líneas direccionales
-        df[f"{base_name}_di_cross_bullish"] = ((plus_di > minus_di) & 
+        new_cols[f"{base_name}_di_cross_bullish"] = ((plus_di > minus_di) & 
                                               (plus_di.shift(1) <= minus_di.shift(1))).astype(int)
         
-        df[f"{base_name}_di_cross_bearish"] = ((minus_di > plus_di) & 
+        new_cols[f"{base_name}_di_cross_bearish"] = ((minus_di > plus_di) & 
                                               (minus_di.shift(1) <= plus_di.shift(1))).astype(int)
         
         # 12. Cambios en ADX
-        df[f"{base_name}_slope"] = adx.diff(1)
-        df[f"{base_name}_acceleration"] = adx.diff(1).diff(1)
+        new_cols[f"{base_name}_slope"] = adx.diff(1)
+        new_cols[f"{base_name}_acceleration"] = adx.diff(1).diff(1)
         
         # 13. Estrechez o separación entre líneas DI
-        df[f"{base_name}_di_spread"] = abs(plus_di - minus_di)
-        df[f"{base_name}_di_spread_change"] = df[f"{base_name}_di_spread"].diff(1)
+        di_spread = abs(plus_di - minus_di)
+        new_cols[f"{base_name}_di_spread"] = di_spread
+        new_cols[f"{base_name}_di_spread_change"] = di_spread.diff(1)
         
         # 14. ADX en niveles críticos
-        df[f"{base_name}_adx_above_threshold"] = (adx > 25).astype(int)
-        df[f"{base_name}_adx_cross_25_up"] = ((adx > 25) & (adx.shift(1) <= 25)).astype(int)
-        df[f"{base_name}_adx_cross_25_down"] = ((adx < 25) & (adx.shift(1) >= 25)).astype(int)
+        new_cols[f"{base_name}_adx_above_threshold"] = (adx > 25).astype(int)
+        new_cols[f"{base_name}_adx_cross_25_up"] = ((adx > 25) & (adx.shift(1) <= 25)).astype(int)
+        new_cols[f"{base_name}_adx_cross_25_down"] = ((adx < 25) & (adx.shift(1) >= 25)).astype(int)
         
         # 15. Tendencia ADX vs periodo anterior
-        df[f"{base_name}_trend_strengthening"] = ((adx > adx.shift(lookback)) & (adx > 25)).astype(int)
-        df[f"{base_name}_trend_weakening"] = ((adx < adx.shift(lookback)) & (adx > 25)).astype(int)
+        new_cols[f"{base_name}_trend_strengthening"] = ((adx > adx.shift(lookback)) & (adx > 25)).astype(int)
+        new_cols[f"{base_name}_trend_weakening"] = ((adx < adx.shift(lookback)) & (adx > 25)).astype(int)
         
         # 16. Estado consolidación/expansión
-        df[f"{base_name}_consolidation"] = ((adx < 25) & (df[f"{base_name}_di_spread"] < 5)).astype(int)
-        df[f"{base_name}_expansion"] = ((adx > 25) & (df[f"{base_name}_di_spread"] > df[f"{base_name}_di_spread"].rolling(lookback).mean())).astype(int)
+        new_cols[f"{base_name}_consolidation"] = ((adx < 25) & (di_spread < 5)).astype(int)
+        new_cols[f"{base_name}_expansion"] = ((adx > 25) & (di_spread > di_spread.rolling(lookback).mean())).astype(int)
         
         # 17. Señales combinadas
         # Confirmación de tendencia alcista fuerte
-        df[f"{base_name}_strong_bullish"] = ((adx > 30) & (plus_di > minus_di) & 
+        new_cols[f"{base_name}_strong_bullish"] = ((adx > 30) & (plus_di > minus_di) & 
                                           (adx > adx.shift(1)) & (plus_di > plus_di.shift(1))).astype(int)
         
         # Confirmación de tendencia bajista fuerte
-        df[f"{base_name}_strong_bearish"] = ((adx > 30) & (minus_di > plus_di) & 
+        new_cols[f"{base_name}_strong_bearish"] = ((adx > 30) & (minus_di > plus_di) & 
                                            (adx > adx.shift(1)) & (minus_di > minus_di.shift(1))).astype(int)
     
     # Reemplazar valores infinitos y NaN
     #df.replace([np.inf, -np.inf], np.nan, inplace=True)
     #df.fillna(0, inplace=True)
     
-    return df
+    return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
 
 def round_number_pivot_engineering(df, close_col='close', high_col='high', low_col='low', 
@@ -1358,88 +1555,102 @@ def round_number_pivot_engineering(df, close_col='close', high_col='high', low_c
     # Proximity threshold for testing/bouncing (5 pips)
     proximity_threshold = 5 * pip_value
     
+    new_cols = {}
+
     # For each level (10, 50, 100, etc.)
     for level in levels:
         base_name = f"round_{level}"
         
         # Find the nearest round numbers above and below current price
-        df[f"{base_name}_above"] = (df[close_col].apply(lambda x: math.ceil(x / level) * level))
-        df[f"{base_name}_below"] = (df[close_col].apply(lambda x: math.floor(x / level) * level))
+        above = (df[close_col].apply(lambda x: math.ceil(x / level) * level))
+        below = (df[close_col].apply(lambda x: math.floor(x / level) * level))
+        new_cols[f"{base_name}_above"] = above
+        new_cols[f"{base_name}_below"] = below
         
         # Calculate distance to these levels in pips
-        df[f"{base_name}_above_dist_pips"] = (df[f"{base_name}_above"] - df[close_col]) * pip_multiplier
-        df[f"{base_name}_below_dist_pips"] = (df[close_col] - df[f"{base_name}_below"]) * pip_multiplier
+        above_dist_pips = (above - df[close_col]) * pip_multiplier
+        below_dist_pips = (df[close_col] - below) * pip_multiplier
+        new_cols[f"{base_name}_above_dist_pips"] = above_dist_pips
+        new_cols[f"{base_name}_below_dist_pips"] = below_dist_pips
         
         # Determine the closest round number level
-        df[f"{base_name}_closest"] = np.where(
-            df[f"{base_name}_above_dist_pips"] < df[f"{base_name}_below_dist_pips"],
-            df[f"{base_name}_above"],
-            df[f"{base_name}_below"]
+        closest = np.where(
+            above_dist_pips < below_dist_pips,
+            above,
+            below
         )
-        df[f"{base_name}_closest_dist_pips"] = np.minimum(
-            df[f"{base_name}_above_dist_pips"],
-            df[f"{base_name}_below_dist_pips"]
+        new_cols[f"{base_name}_closest"] = closest
+        
+        closest_dist_pips = np.minimum(
+            above_dist_pips,
+            below_dist_pips
         )
+        new_cols[f"{base_name}_closest_dist_pips"] = closest_dist_pips
         
         # Calculate trend towards or away from the closest round number
         # Negative value means price is getting closer to the level
         # Positive value means price is moving away from the level
-        df[f"{base_name}_trend_to_closest"] = df[f"{base_name}_closest_dist_pips"] - df[f"{base_name}_closest_dist_pips"].shift(1)
+        trend_to_closest = closest_dist_pips - pd.Series(closest_dist_pips).shift(1)
+        new_cols[f"{base_name}_trend_to_closest"] = trend_to_closest
         
         # Binary indicators for approaching or moving away from level
-        df[f"{base_name}_approaching"] = (df[f"{base_name}_trend_to_closest"] < 0).astype(int)
-        df[f"{base_name}_moving_away"] = (df[f"{base_name}_trend_to_closest"] > 0).astype(int)
+        new_cols[f"{base_name}_approaching"] = (trend_to_closest < 0).astype(int)
+        new_cols[f"{base_name}_moving_away"] = (trend_to_closest > 0).astype(int)
         
         # Calculate recent tests of these levels (price came within threshold of the level)
-        df[f"{base_name}_above_tested"] = ((df[high_col] >= df[f"{base_name}_above"] - proximity_threshold) & 
-                                         (df[high_col] <= df[f"{base_name}_above"] + proximity_threshold)).astype(int)
+        above_tested = ((df[high_col] >= above - proximity_threshold) & 
+                                         (df[high_col] <= above + proximity_threshold)).astype(int)
+        new_cols[f"{base_name}_above_tested"] = above_tested
         
-        df[f"{base_name}_below_tested"] = ((df[low_col] >= df[f"{base_name}_below"] - proximity_threshold) & 
-                                         (df[low_col] <= df[f"{base_name}_below"] + proximity_threshold)).astype(int)
+        below_tested = ((df[low_col] >= below - proximity_threshold) & 
+                                         (df[low_col] <= below + proximity_threshold)).astype(int)
+        new_cols[f"{base_name}_below_tested"] = below_tested
         
         # Rolling sum of tests over lookback period
-        df[f"{base_name}_above_test_count"] = df[f"{base_name}_above_tested"].rolling(
+        above_test_count = above_tested.rolling(
             window=lookback, min_periods=1).sum()
+        new_cols[f"{base_name}_above_test_count"] = above_test_count
         
-        df[f"{base_name}_below_test_count"] = df[f"{base_name}_below_tested"].rolling(
+        below_test_count = below_tested.rolling(
             window=lookback, min_periods=1).sum()
+        new_cols[f"{base_name}_below_test_count"] = below_test_count
         
         # Overall level strength (sum of both test counts)
-        df[f"{base_name}_level_strength"] = df[f"{base_name}_above_test_count"] + df[f"{base_name}_below_test_count"]
+        new_cols[f"{base_name}_level_strength"] = above_test_count + below_test_count
         
         # Detect bounce patterns (price tested level then moved significantly away)
         # Bounce from above level (resistance)
-        df[f"{base_name}_above_bounce"] = (
-            df[f"{base_name}_above_tested"] & 
-            (df[close_col] < df[f"{base_name}_above"] - 2 * proximity_threshold) & 
-            (df[close_col].shift(1) >= df[f"{base_name}_above"] - proximity_threshold)
+        new_cols[f"{base_name}_above_bounce"] = (
+            above_tested & 
+            (df[close_col] < above - 2 * proximity_threshold) & 
+            (df[close_col].shift(1) >= above - proximity_threshold)
         ).astype(int)
         
         # Bounce from below level (support)
-        df[f"{base_name}_below_bounce"] = (
-            df[f"{base_name}_below_tested"] & 
-            (df[close_col] > df[f"{base_name}_below"] + 2 * proximity_threshold) & 
-            (df[close_col].shift(1) <= df[f"{base_name}_below"] + proximity_threshold)
+        new_cols[f"{base_name}_below_bounce"] = (
+            below_tested & 
+            (df[close_col] > below + 2 * proximity_threshold) & 
+            (df[close_col].shift(1) <= below + proximity_threshold)
         ).astype(int)
         
         # Detect breakouts through these levels
-        df[f"{base_name}_above_breakout"] = (
-            (df[close_col] > df[f"{base_name}_above"]) & 
-            (df[close_col].shift(1) <= df[f"{base_name}_above"]) & 
-            (df[f"{base_name}_above_test_count"] > 0)
+        new_cols[f"{base_name}_above_breakout"] = (
+            (df[close_col] > above) & 
+            (df[close_col].shift(1) <= above) & 
+            (above_test_count > 0)
         ).astype(int)
         
-        df[f"{base_name}_below_breakout"] = (
-            (df[close_col] < df[f"{base_name}_below"]) & 
-            (df[close_col].shift(1) >= df[f"{base_name}_below"]) & 
-            (df[f"{base_name}_below_test_count"] > 0)
+        new_cols[f"{base_name}_below_breakout"] = (
+            (df[close_col] < below) & 
+            (df[close_col].shift(1) >= below) & 
+            (below_test_count > 0)
         ).astype(int)
     
     # Replace infinite values and NaN
     #df.replace([np.inf, -np.inf], np.nan, inplace=True)
     #df.fillna(0, inplace=True)
     
-    return df
+    return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
 
 def create_basic_patterns(df, cluster_column='cluster', n_candles=4):
@@ -1683,112 +1894,115 @@ def cci_engineering(df, periods=[14, 20], lookback=5, slope_window=3):
     
     # Calcular CCI para cada periodo
     cci_cols = []
+    new_cols = {}
     for period in periods:
         base_name = f"CCI_{period}"
         cci_cols.append(base_name)
         
         # 1. Calcular la media móvil simple del precio típico
-        df[f"{base_name}_ma"] = df['typical_price'].rolling(window=period).mean()
+        ma = df['typical_price'].rolling(window=period).mean()
         
         # 2. Calcular la desviación media
-        df[f"{base_name}_mean_deviation"] = df['typical_price'].rolling(window=period).apply(
+        mean_deviation = df['typical_price'].rolling(window=period).apply(
             lambda x: abs(x - x.mean()).mean()
         )
         
         # 3. Calcular el CCI
         # CCI = (Precio Típico - SMA) / (0.015 * Desviación media)
-        df[base_name] = (df['typical_price'] - df[f"{base_name}_ma"]) / (0.015 * df[f"{base_name}_mean_deviation"])
+        cci = (df['typical_price'] - ma) / (0.015 * mean_deviation)
+        new_cols[base_name] = cci
         
         # Eliminar columnas intermedias para no sobrecargar el DataFrame
-        df = df.drop(columns=[f"{base_name}_ma", f"{base_name}_mean_deviation"], errors='ignore')
+        # df = df.drop(columns=[f"{base_name}_ma", f"{base_name}_mean_deviation"], errors='ignore')
         
         # 4. Estados del CCI (indicadores binarios)
-        df[f"{base_name}_extreme_overbought"] = (df[base_name] > 200).astype(int)
-        df[f"{base_name}_overbought"] = ((df[base_name] <= 200) & (df[base_name] > 100)).astype(int)
-        df[f"{base_name}_strong"] = ((df[base_name] <= 100) & (df[base_name] > 0)).astype(int)
-        df[f"{base_name}_weak"] = ((df[base_name] <= 0) & (df[base_name] > -100)).astype(int)
-        df[f"{base_name}_oversold"] = ((df[base_name] <= -100) & (df[base_name] > -200)).astype(int)
-        df[f"{base_name}_extreme_oversold"] = (df[base_name] <= -200).astype(int)
+        new_cols[f"{base_name}_extreme_overbought"] = (cci > 200).astype(int)
+        new_cols[f"{base_name}_overbought"] = ((cci <= 200) & (cci > 100)).astype(int)
+        new_cols[f"{base_name}_strong"] = ((cci <= 100) & (cci > 0)).astype(int)
+        new_cols[f"{base_name}_weak"] = ((cci <= 0) & (cci > -100)).astype(int)
+        new_cols[f"{base_name}_oversold"] = ((cci <= -100) & (cci > -200)).astype(int)
+        new_cols[f"{base_name}_extreme_oversold"] = (cci <= -200).astype(int)
         
         # 5. Pendientes y cambios de dirección
-        df[f"{base_name}_slope"] = df[base_name].diff(1)
-        df[f"{base_name}_slope_mean"] = df[f"{base_name}_slope"].rolling(window=slope_window, min_periods=1).mean()
-        df[f"{base_name}_acceleration"] = df[f"{base_name}_slope"].diff(1)
+        slope = cci.diff(1)
+        new_cols[f"{base_name}_slope"] = slope
+        new_cols[f"{base_name}_slope_mean"] = slope.rolling(window=slope_window, min_periods=1).mean()
+        new_cols[f"{base_name}_acceleration"] = slope.diff(1)
         
         # 6. Cruces de niveles importantes
-        df[f"{base_name}_cross_100_up"] = ((df[base_name].shift(1) < 100) & (df[base_name] >= 100)).astype(int)
-        df[f"{base_name}_cross_0_up"] = ((df[base_name].shift(1) < 0) & (df[base_name] >= 0)).astype(int)
-        df[f"{base_name}_cross_neg100_up"] = ((df[base_name].shift(1) < -100) & (df[base_name] >= -100)).astype(int)
+        new_cols[f"{base_name}_cross_100_up"] = ((cci.shift(1) < 100) & (cci >= 100)).astype(int)
+        new_cols[f"{base_name}_cross_0_up"] = ((cci.shift(1) < 0) & (cci >= 0)).astype(int)
+        new_cols[f"{base_name}_cross_neg100_up"] = ((cci.shift(1) < -100) & (cci >= -100)).astype(int)
         
-        df[f"{base_name}_cross_100_down"] = ((df[base_name].shift(1) > 100) & (df[base_name] <= 100)).astype(int)
-        df[f"{base_name}_cross_0_down"] = ((df[base_name].shift(1) > 0) & (df[base_name] <= 0)).astype(int)
-        df[f"{base_name}_cross_neg100_down"] = ((df[base_name].shift(1) > -100) & (df[base_name] <= -100)).astype(int)
+        new_cols[f"{base_name}_cross_100_down"] = ((cci.shift(1) > 100) & (cci <= 100)).astype(int)
+        new_cols[f"{base_name}_cross_0_down"] = ((cci.shift(1) > 0) & (cci <= 0)).astype(int)
+        new_cols[f"{base_name}_cross_neg100_down"] = ((cci.shift(1) > -100) & (cci <= -100)).astype(int)
         
         # 7. Momentum y volatilidad del CCI
-        df[f"{base_name}_momentum"] = df[base_name] - df[base_name].shift(lookback)
-        df[f"{base_name}_volatility"] = df[base_name].rolling(window=lookback).std()
+        new_cols[f"{base_name}_momentum"] = cci - cci.shift(lookback)
+        new_cols[f"{base_name}_volatility"] = cci.rolling(window=lookback).std()
         
         # 8. Divergencias con el precio
         # Divergencia alcista: precio hace mínimos más bajos pero CCI hace mínimos más altos
-        df[f"{base_name}_bullish_divergence"] = (
+        new_cols[f"{base_name}_bullish_divergence"] = (
             (df['close'] < df['close'].shift(lookback)) &  # Precio bajando
-            (df[base_name] > df[base_name].shift(lookback)) &  # CCI subiendo
-            (df[base_name] < -100)  # CCI en zona de sobreventa
+            (cci > cci.shift(lookback)) &  # CCI subiendo
+            (cci < -100)  # CCI en zona de sobreventa
         ).astype(int)
         
         # Divergencia bajista: precio hace máximos más altos pero CCI hace máximos más bajos
-        df[f"{base_name}_bearish_divergence"] = (
+        new_cols[f"{base_name}_bearish_divergence"] = (
             (df['close'] > df['close'].shift(lookback)) &  # Precio subiendo
-            (df[base_name] < df[base_name].shift(lookback)) &  # CCI bajando
-            (df[base_name] > 100)  # CCI en zona de sobrecompra
+            (cci < cci.shift(lookback)) &  # CCI bajando
+            (cci > 100)  # CCI en zona de sobrecompra
         ).astype(int)
         
         # 9. Tendencia del CCI
-        df[f"{base_name}_uptrend"] = (df[base_name] > 0).astype(int)
-        df[f"{base_name}_downtrend"] = (df[base_name] < 0).astype(int)
+        new_cols[f"{base_name}_uptrend"] = (cci > 0).astype(int)
+        new_cols[f"{base_name}_downtrend"] = (cci < 0).astype(int)
         
         # 10. Señales de negociación basadas en el CCI
         # Señal de compra: cruce por encima de -100 desde la zona de sobreventa
-        df[f"{base_name}_buy_signal"] = (
-            df[f"{base_name}_cross_neg100_up"] & 
-            (df[base_name].shift(1) < -100)
+        new_cols[f"{base_name}_buy_signal"] = (
+            new_cols[f"{base_name}_cross_neg100_up"] & 
+            (cci.shift(1) < -100)
         ).astype(int)
         
         # Señal de venta: cruce por debajo de 100 desde la zona de sobrecompra
-        df[f"{base_name}_sell_signal"] = (
-            df[f"{base_name}_cross_100_down"] & 
-            (df[base_name].shift(1) > 100)
+        new_cols[f"{base_name}_sell_signal"] = (
+            new_cols[f"{base_name}_cross_100_down"] & 
+            (cci.shift(1) > 100)
         ).astype(int)
         
         # 11. Fuerza de la tendencia
-        df[f"{base_name}_trend_strength"] = abs(df[base_name]) / 100
+        new_cols[f"{base_name}_trend_strength"] = abs(cci) / 100
         
         # 12. Tiempo en zonas extremas
-        df[f"{base_name}_in_overbought"] = (df[base_name] > 100).rolling(window=lookback).sum()
-        df[f"{base_name}_in_oversold"] = (df[base_name] < -100).rolling(window=lookback).sum()
+        new_cols[f"{base_name}_in_overbought"] = (cci > 100).rolling(window=lookback).sum()
+        new_cols[f"{base_name}_in_oversold"] = (cci < -100).rolling(window=lookback).sum()
         
         # 13. Oscilación extrema (volatilidad de corto plazo)
-        df[f"{base_name}_extreme_move"] = ((abs(df[base_name] - df[base_name].shift(1))) > 50).astype(int)
+        new_cols[f"{base_name}_extreme_move"] = ((abs(cci - cci.shift(1))) > 50).astype(int)
     
     # Comparaciones entre diferentes periodos de CCI (si hay más de uno)
     if len(cci_cols) > 1:
-        short_cci = cci_cols[0]  # Asumimos que el primero es más corto
-        long_cci = cci_cols[-1]  # Asumimos que el último es más largo
+        short_cci = new_cols[cci_cols[0]]  # Asumimos que el primero es más corto
+        long_cci = new_cols[cci_cols[-1]]  # Asumimos que el último es más largo
         
         # Diferencia entre CCI corto y largo
-        df["CCI_short_minus_long"] = df[short_cci] - df[long_cci]
+        new_cols["CCI_short_minus_long"] = short_cci - long_cci
         
         # Cruce del CCI corto por encima/debajo del CCI largo
-        df["CCI_short_cross_above_long"] = ((df[short_cci].shift(1) <= df[long_cci].shift(1)) & 
-                                          (df[short_cci] > df[long_cci])).astype(int)
-        df["CCI_short_cross_below_long"] = ((df[short_cci].shift(1) >= df[long_cci].shift(1)) & 
-                                          (df[short_cci] < df[long_cci])).astype(int)
+        new_cols["CCI_short_cross_above_long"] = ((short_cci.shift(1) <= long_cci.shift(1)) & 
+                                          (short_cci > long_cci)).astype(int)
+        new_cols["CCI_short_cross_below_long"] = ((short_cci.shift(1) >= long_cci.shift(1)) & 
+                                          (short_cci < long_cci)).astype(int)
     
     # Eliminar la columna temporal de precio típico
     df = df.drop(columns=['typical_price'], errors='ignore')
     
     # No eliminamos filas con NaN, siguiendo la política establecida
-    return df
+    return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
 
 def parabolic_sar_engineering(df, af_starts=[0.02], af_maxes=[0.2], lookback=5):
@@ -1828,6 +2042,7 @@ def parabolic_sar_engineering(df, af_starts=[0.02], af_maxes=[0.2], lookback=5):
             raise ValueError(f"La columna {col} no existe en el DataFrame.")
     
     # Para cada combinación de parámetros
+    new_cols = {}
     for af_start in af_starts:
         for af_max in af_maxes:
             # Nombre base para este conjunto de parámetros
@@ -1907,75 +2122,84 @@ def parabolic_sar_engineering(df, af_starts=[0.02], af_maxes=[0.2], lookback=5):
                 is_long.append(is_long_new)
             
             # Asignar valores al DataFrame
-            df[f"{base_name}"] = sar_values
-            df[f"{base_name}_trend"] = [1 if x else -1 for x in is_long]  # 1 para alcista, -1 para bajista
-            df[f"{base_name}_af"] = af_values
+            new_cols[f"{base_name}"] = sar_values
+            trend_list = [1 if x else -1 for x in is_long]
+            new_cols[f"{base_name}_trend"] = trend_list  # 1 para alcista, -1 para bajista
+            new_cols[f"{base_name}_af"] = af_values
+            
+            # Convertir a Series para operaciones vectorizadas
+            sar_series = pd.Series(sar_values, index=df.index)
+            trend_series = pd.Series(trend_list, index=df.index)
             
             # 1. Distancia entre precio y SAR en pips
-            df[f"{base_name}_distance_pips"] = ((df['close'] - df[f"{base_name}"]) * 10000 * 
-                                              df[f"{base_name}_trend"])
+            distance_pips = ((df['close'] - sar_series) * 10000 * trend_series)
+            new_cols[f"{base_name}_distance_pips"] = distance_pips
             
             # 2. Detectar cambios de tendencia (SAR flips)
-            df[f"{base_name}_trend_change"] = df[f"{base_name}_trend"].diff().abs() / 2
+            new_cols[f"{base_name}_trend_change"] = trend_series.diff().abs() / 2
             
             # 3. Señales de compra/venta basadas en cambios de tendencia
-            df[f"{base_name}_buy_signal"] = ((df[f"{base_name}_trend"] == 1) & 
-                                           (df[f"{base_name}_trend"].shift(1) == -1)).astype(int)
-            df[f"{base_name}_sell_signal"] = ((df[f"{base_name}_trend"] == -1) & 
-                                            (df[f"{base_name}_trend"].shift(1) == 1)).astype(int)
+            new_cols[f"{base_name}_buy_signal"] = ((trend_series == 1) & 
+                                           (trend_series.shift(1) == -1)).astype(int)
+            new_cols[f"{base_name}_sell_signal"] = ((trend_series == -1) & 
+                                            (trend_series.shift(1) == 1)).astype(int)
             
             # 4. Velocidad de cambio del SAR
-            df[f"{base_name}_velocity"] = df[f"{base_name}"].diff().abs() * 10000  # en pips
+            velocity = sar_series.diff().abs() * 10000  # en pips
+            new_cols[f"{base_name}_velocity"] = velocity
             
             # 5. Aceleración del SAR
-            df[f"{base_name}_acceleration"] = df[f"{base_name}_velocity"].diff()
+            new_cols[f"{base_name}_acceleration"] = velocity.diff()
             
             # 6. Media móvil de la velocidad del SAR
-            df[f"{base_name}_velocity_mean"] = df[f"{base_name}_velocity"].rolling(window=lookback).mean()
+            velocity_mean = velocity.rolling(window=lookback).mean()
+            new_cols[f"{base_name}_velocity_mean"] = velocity_mean
             
             # 7. Posición relativa del precio respecto al SAR
-            df[f"{base_name}_rel_position"] = (df['close'] - df[f"{base_name}"]) / df[f"{base_name}"] * 100
+            new_cols[f"{base_name}_rel_position"] = (df['close'] - sar_series) / sar_series * 100
             
             # 8. Días consecutivos en la misma tendencia
-            df[f"{base_name}_trend_duration"] = df[f"{base_name}_trend"].groupby(
-                (df[f"{base_name}_trend"] != df[f"{base_name}_trend"].shift(1)).cumsum()
+            trend_duration = trend_series.groupby(
+                (trend_series != trend_series.shift(1)).cumsum()
             ).cumcount() + 1
+            new_cols[f"{base_name}_trend_duration"] = trend_duration
             
             # 9. Fuerza de la tendencia (distancia normalizada por volatilidad)
             atr = df['high'] - df['low']  # Simplificación de ATR
-            df[f"{base_name}_trend_strength"] = df[f"{base_name}_distance_pips"] / (atr * 10000)
+            new_cols[f"{base_name}_trend_strength"] = distance_pips / (atr * 10000)
             
             # 10. Proximidad al SAR (inversa de la distancia, valores más altos = más cerca)
-            df[f"{base_name}_proximity"] = 1 / (df[f"{base_name}_distance_pips"] + 1)
+            proximity = 1 / (distance_pips + 1)
+            new_cols[f"{base_name}_proximity"] = proximity
             
             # 11. Señal de riesgo (precio acercándose al SAR en tendencia)
-            df[f"{base_name}_risk_signal"] = ((df[f"{base_name}_distance_pips"] < 
-                                             df[f"{base_name}_distance_pips"].shift(1)) & 
-                                            (df[f"{base_name}_trend"] == df[f"{base_name}_trend"].shift(1))).astype(int)
+            new_cols[f"{base_name}_risk_signal"] = ((distance_pips < 
+                                             distance_pips.shift(1)) & 
+                                            (trend_series == trend_series.shift(1))).astype(int)
             
             # 12. Señal de aceleración (SAR acelerando)
-            df[f"{base_name}_accel_signal"] = (df[f"{base_name}_velocity"] > 
-                                             df[f"{base_name}_velocity_mean"]).astype(int)
+            new_cols[f"{base_name}_accel_signal"] = (velocity > 
+                                             velocity_mean).astype(int)
             
             # 13. Protección de ganancias (SAR cerca del precio durante tendencia prolongada)
-            df[f"{base_name}_profit_protection"] = ((df[f"{base_name}_proximity"] > 0.1) & 
-                                                  (df[f"{base_name}_trend_duration"] > 5)).astype(int)
+            new_cols[f"{base_name}_profit_protection"] = ((proximity > 0.1) & 
+                                                  (trend_duration > 5)).astype(int)
             
             # 14. Tendencia con momento (tendencia sostenida con precio alejándose del SAR)
-            df[f"{base_name}_trend_momentum"] = ((df[f"{base_name}_trend_duration"] > 3) & 
-                                               (df[f"{base_name}_distance_pips"] > 
-                                                df[f"{base_name}_distance_pips"].shift(1))).astype(int)
+            new_cols[f"{base_name}_trend_momentum"] = ((trend_duration > 3) & 
+                                               (distance_pips > 
+                                                distance_pips.shift(1))).astype(int)
             
             # 15. Convergencia precio-SAR (precio acercándose al SAR)
-            df[f"{base_name}_price_sar_convergence"] = ((df[f"{base_name}_distance_pips"] < 
-                                                       df[f"{base_name}_distance_pips"].shift(1))).astype(int)
+            new_cols[f"{base_name}_price_sar_convergence"] = ((distance_pips < 
+                                                       distance_pips.shift(1))).astype(int)
             
             # 16. Divergencia precio-SAR (precio alejándose del SAR)
-            df[f"{base_name}_price_sar_divergence"] = ((df[f"{base_name}_distance_pips"] > 
-                                                      df[f"{base_name}_distance_pips"].shift(1))).astype(int)
+            new_cols[f"{base_name}_price_sar_divergence"] = ((distance_pips > 
+                                                      distance_pips.shift(1))).astype(int)
     
     # No eliminamos filas con NaN, siguiendo la política establecida
-    return df
+    return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
 
 
@@ -2020,6 +2244,8 @@ def fractal_engineering(df, window_sizes=[5], lookback=10, high_col='high', low_
         if col not in df.columns:
             raise ValueError(f"La columna {col} no existe en el DataFrame.")
     
+    new_cols = {}
+
     # Para cada tamaño de ventana
     for window in window_sizes:
         # Necesitamos un número impar para la ventana (centro + lados iguales)
@@ -2064,12 +2290,12 @@ def fractal_engineering(df, window_sizes=[5], lookback=10, high_col='high', low_
                 bearish_fractal[i] = 1
         
         # Guardar los fractales identificados en el DataFrame
-        df[f"{base_name}_bullish"] = bullish_fractal
-        df[f"{base_name}_bearish"] = bearish_fractal
+        new_cols[f"{base_name}_bullish"] = bullish_fractal
+        new_cols[f"{base_name}_bearish"] = bearish_fractal
         
         # Capturar los valores de precio donde ocurren los fractales
-        df[f"{base_name}_bullish_price"] = np.where(bullish_fractal == 1, df[high_col], np.nan)
-        df[f"{base_name}_bearish_price"] = np.where(bearish_fractal == 1, df[low_col], np.nan)
+        new_cols[f"{base_name}_bullish_price"] = np.where(bullish_fractal == 1, df[high_col], np.nan)
+        new_cols[f"{base_name}_bearish_price"] = np.where(bearish_fractal == 1, df[low_col], np.nan)
         
         # 3. Distancia entre fractales sucesivos (en barras)
         # Calcular la distancia desde el último fractal alcista/bajista
@@ -2089,25 +2315,25 @@ def fractal_engineering(df, window_sizes=[5], lookback=10, high_col='high', low_
                     bearish_distances[j] = i - last_bearish_idx
                 last_bearish_idx = i
         
-        df[f"{base_name}_bull_distance"] = bullish_distances
-        df[f"{base_name}_bear_distance"] = bearish_distances
+        new_cols[f"{base_name}_bull_distance"] = bullish_distances
+        new_cols[f"{base_name}_bear_distance"] = bearish_distances
         
         # 4. Dirección del fractal (alcista o bajista)
         # 1 para alcista, -1 para bajista, 0 para sin fractal
-        df[f"{base_name}_direction"] = np.where(
+        new_cols[f"{base_name}_direction"] = np.where(
             bullish_fractal == 1, 1, np.where(
                 bearish_fractal == 1, -1, 0
             )
         )
         
         # 5. Fortaleza del fractal (diferencia porcentual entre el fractal y el precio anterior)
-        df[f"{base_name}_bullish_strength"] = np.where(
+        new_cols[f"{base_name}_bullish_strength"] = np.where(
             bullish_fractal == 1, 
             (df[high_col] / df[close_col].shift(1) - 1) * 100,
             np.nan
         )
         
-        df[f"{base_name}_bearish_strength"] = np.where(
+        new_cols[f"{base_name}_bearish_strength"] = np.where(
             bearish_fractal == 1, 
             (1 - df[low_col] / df[close_col].shift(1)) * 100,
             np.nan
@@ -2115,79 +2341,94 @@ def fractal_engineering(df, window_sizes=[5], lookback=10, high_col='high', low_
         
         # 6. Líneas de tendencia basadas en fractales
         # Forward fill los precios de los fractales para crear líneas de tendencia
-        df[f"{base_name}_bull_trend_line"] = df[f"{base_name}_bullish_price"].fillna(method='ffill')
-        df[f"{base_name}_bear_trend_line"] = df[f"{base_name}_bearish_price"].fillna(method='ffill')
+        bull_trend_line = pd.Series(np.where(bullish_fractal == 1, df[high_col], np.nan), index=df.index).fillna(method='ffill')
+        bear_trend_line = pd.Series(np.where(bearish_fractal == 1, df[low_col], np.nan), index=df.index).fillna(method='ffill')
+        
+        new_cols[f"{base_name}_bull_trend_line"] = bull_trend_line
+        new_cols[f"{base_name}_bear_trend_line"] = bear_trend_line
         
         # 7. Señales de ruptura de líneas de tendencia
-        df[f"{base_name}_bull_break"] = (df[close_col] > df[f"{base_name}_bull_trend_line"]).astype(int)
-        df[f"{base_name}_bear_break"] = (df[close_col] < df[f"{base_name}_bear_trend_line"]).astype(int)
-        
+        new_cols[f"{base_name}_bull_break"] = (df[close_col] > bull_trend_line).astype(int)
+        new_cols[f"{base_name}_bear_break"] = (df[close_col] < bear_trend_line).astype(int)
+    
         # 8. Canales de fractales (líneas de tendencia superior e inferior)
-        df[f"{base_name}_upper_channel"] = df[f"{base_name}_bullish_price"].rolling(lookback).max().fillna(method='ffill')
-        df[f"{base_name}_lower_channel"] = df[f"{base_name}_bearish_price"].rolling(lookback).min().fillna(method='ffill')
+        bullish_price_series = pd.Series(np.where(bullish_fractal == 1, df[high_col], np.nan), index=df.index)
+        bearish_price_series = pd.Series(np.where(bearish_fractal == 1, df[low_col], np.nan), index=df.index)
+        
+        upper_channel = bullish_price_series.rolling(lookback).max().fillna(method='ffill')
+        lower_channel = bearish_price_series.rolling(lookback).min().fillna(method='ffill')
+        
+        new_cols[f"{base_name}_upper_channel"] = upper_channel
+        new_cols[f"{base_name}_lower_channel"] = lower_channel
         
         # 9. Posición relativa dentro del canal de fractales (0 a 1)
-        channel_height = df[f"{base_name}_upper_channel"] - df[f"{base_name}_lower_channel"]
-        df[f"{base_name}_channel_position"] = (df[close_col] - df[f"{base_name}_lower_channel"]) / channel_height.replace(0, np.nan)
+        channel_height = upper_channel - lower_channel
+        new_cols[f"{base_name}_channel_position"] = (df[close_col] - lower_channel) / channel_height.replace(0, np.nan)
         
         # 10. Fractales consecutivos del mismo tipo
-        df[f"{base_name}_consecutive_bull"] = ((df[f"{base_name}_direction"] == 1) & 
-                                              (df[f"{base_name}_direction"].shift(1) == 1)).astype(int)
-        df[f"{base_name}_consecutive_bear"] = ((df[f"{base_name}_direction"] == -1) & 
-                                              (df[f"{base_name}_direction"].shift(1) == -1)).astype(int)
+        direction_series = pd.Series(new_cols[f"{base_name}_direction"], index=df.index)
+        
+        new_cols[f"{base_name}_consecutive_bull"] = ((direction_series == 1) & 
+                                              (direction_series.shift(1) == 1)).astype(int)
+        new_cols[f"{base_name}_consecutive_bear"] = ((direction_series == -1) & 
+                                              (direction_series.shift(1) == -1)).astype(int)
         
         # 11. Divergencias entre precio y fractales
         # Bullish divergence: precio hace mínimos más bajos, pero fractales hacen mínimos más altos
-        last_bearish_prices = df[f"{base_name}_bearish_price"].fillna(method='ffill')
+        last_bearish_prices = bear_trend_line 
         
-        df[f"{base_name}_bull_divergence"] = (
+        new_cols[f"{base_name}_bull_divergence"] = (
             (df[close_col] < df[close_col].shift(lookback)) & 
             (last_bearish_prices > last_bearish_prices.shift(lookback)) &
             (last_bearish_prices > 0)  # Asegurarse de que hay un fractal reciente
         ).astype(int)
         
         # Bearish divergence: precio hace máximos más altos, pero fractales hacen máximos más bajos
-        last_bullish_prices = df[f"{base_name}_bullish_price"].fillna(method='ffill')
+        last_bullish_prices = bull_trend_line 
         
-        df[f"{base_name}_bear_divergence"] = (
+        new_cols[f"{base_name}_bear_divergence"] = (
             (df[close_col] > df[close_col].shift(lookback)) & 
             (last_bullish_prices < last_bullish_prices.shift(lookback)) &
             (last_bullish_prices > 0)  # Asegurarse de que hay un fractal reciente
         ).astype(int)
         
         # 12. Frecuencia de fractales (conteo en ventana móvil)
-        df[f"{base_name}_bull_frequency"] = df[f"{base_name}_bullish"].rolling(lookback).sum()
-        df[f"{base_name}_bear_frequency"] = df[f"{base_name}_bearish"].rolling(lookback).sum()
-        df[f"{base_name}_total_frequency"] = df[f"{base_name}_bull_frequency"] + df[f"{base_name}_bear_frequency"]
+        bullish_fractal_series = pd.Series(bullish_fractal, index=df.index)
+        bearish_fractal_series = pd.Series(bearish_fractal, index=df.index)
+        
+        bull_freq = bullish_fractal_series.rolling(lookback).sum()
+        bear_freq = bearish_fractal_series.rolling(lookback).sum()
+        
+        new_cols[f"{base_name}_bull_frequency"] = bull_freq
+        new_cols[f"{base_name}_bear_frequency"] = bear_freq
+        new_cols[f"{base_name}_total_frequency"] = bull_freq + bear_freq
         
         # 13. Señal de compra: precio supera un fractal alcista reciente
-        df[f"{base_name}_buy_signal"] = ((df[close_col] > df[f"{base_name}_bullish_price"].shift(1)) & 
-                                         (df[f"{base_name}_bullish"].shift(1) == 1)).astype(int)
+        new_cols[f"{base_name}_buy_signal"] = ((df[close_col] > bullish_price_series.shift(1)) & 
+                                         (bullish_fractal_series.shift(1) == 1)).astype(int)
         
         # 14. Señal de venta: precio cae por debajo de un fractal bajista reciente
-        df[f"{base_name}_sell_signal"] = ((df[close_col] < df[f"{base_name}_bearish_price"].shift(1)) & 
-                                          (df[f"{base_name}_bearish"].shift(1) == 1)).astype(int)
+        new_cols[f"{base_name}_sell_signal"] = ((df[close_col] < bearish_price_series.shift(1)) & 
+                                          (bearish_fractal_series.shift(1) == 1)).astype(int)
         
         # 15. Nivel de soporte (último fractal bajista)
-        df[f"{base_name}_support"] = df[f"{base_name}_bearish_price"].fillna(method='ffill')
+        new_cols[f"{base_name}_support"] = bear_trend_line
         
         # 16. Nivel de resistencia (último fractal alcista)
-        df[f"{base_name}_resistance"] = df[f"{base_name}_bullish_price"].fillna(method='ffill')
+        new_cols[f"{base_name}_resistance"] = bull_trend_line
         
         # 17. Distancia a soporte/resistencia (en pips)
-        df[f"{base_name}_dist_to_support"] = (df[close_col] - df[f"{base_name}_support"]) * 10000
-        df[f"{base_name}_dist_to_resistance"] = (df[f"{base_name}_resistance"] - df[close_col]) * 10000
+        new_cols[f"{base_name}_dist_to_support"] = (df[close_col] - bear_trend_line) * 10000
+        new_cols[f"{base_name}_dist_to_resistance"] = (bull_trend_line - df[close_col]) * 10000
         
         # 18. Patrones de fractales (secuencia de los últimos 3 fractales)
-        # Codificamos: 1=alcista, -1=bajista, usamos ventana deslizante para los últimos 3
-        directions = df[f"{base_name}_direction"]
         pattern_matrix = np.zeros((len(df), 3))  # Almacena los últimos 3 fractales
-        
         last_fractals = []  # Almacena los últimos 3 tipos de fractales
+        direction = new_cols[f"{base_name}_direction"]
         
         for i in range(len(df)):
-            if directions[i] != 0:  # Si es un fractal
-                last_fractals.append(directions[i])
+            if direction[i] != 0:  # Si es un fractal
+                last_fractals.append(direction[i])
                 if len(last_fractals) > 3:
                     last_fractals.pop(0)
             
@@ -2196,33 +2437,33 @@ def fractal_engineering(df, window_sizes=[5], lookback=10, high_col='high', low_
                 pattern_matrix[i, j] = last_fractals[-(j+1)]
         
         # Crear columnas de patrón
-        df[f"{base_name}_pattern_1"] = pattern_matrix[:, 0]  # Fractal más reciente
-        df[f"{base_name}_pattern_2"] = pattern_matrix[:, 1]  # Segundo fractal más reciente
-        df[f"{base_name}_pattern_3"] = pattern_matrix[:, 2]  # Tercer fractal más reciente
+        new_cols[f"{base_name}_pattern_1"] = pattern_matrix[:, 0]  # Fractal más reciente
+        new_cols[f"{base_name}_pattern_2"] = pattern_matrix[:, 1]  # Segundo fractal más reciente
+        new_cols[f"{base_name}_pattern_3"] = pattern_matrix[:, 2]  # Tercer fractal más reciente
         
         # 19. Identificar patrones específicos de fractales
         # Patrón alcista: 3 fractales bajistas consecutivos
-        df[f"{base_name}_triple_bottom"] = ((df[f"{base_name}_pattern_1"] == -1) & 
-                                            (df[f"{base_name}_pattern_2"] == -1) & 
-                                            (df[f"{base_name}_pattern_3"] == -1)).astype(int)
+        new_cols[f"{base_name}_triple_bottom"] = ((pattern_matrix[:, 0] == -1) & 
+                                            (pattern_matrix[:, 1] == -1) & 
+                                            (pattern_matrix[:, 2] == -1)).astype(int)
         
         # Patrón bajista: 3 fractales alcistas consecutivos
-        df[f"{base_name}_triple_top"] = ((df[f"{base_name}_pattern_1"] == 1) & 
-                                         (df[f"{base_name}_pattern_2"] == 1) & 
-                                         (df[f"{base_name}_pattern_3"] == 1)).astype(int)
+        new_cols[f"{base_name}_triple_top"] = ((pattern_matrix[:, 0] == 1) & 
+                                         (pattern_matrix[:, 1] == 1) & 
+                                         (pattern_matrix[:, 2] == 1)).astype(int)
         
         # Patrón de reversa: alcista-bajista-alcista
-        df[f"{base_name}_v_reversal"] = ((df[f"{base_name}_pattern_1"] == 1) & 
-                                         (df[f"{base_name}_pattern_2"] == -1) & 
-                                         (df[f"{base_name}_pattern_3"] == 1)).astype(int)
+        new_cols[f"{base_name}_v_reversal"] = ((pattern_matrix[:, 0] == 1) & 
+                                         (pattern_matrix[:, 1] == -1) & 
+                                         (pattern_matrix[:, 2] == 1)).astype(int)
         
         # Patrón de reversa: bajista-alcista-bajista
-        df[f"{base_name}_inverted_v"] = ((df[f"{base_name}_pattern_1"] == -1) & 
-                                         (df[f"{base_name}_pattern_2"] == 1) & 
-                                         (df[f"{base_name}_pattern_3"] == -1)).astype(int)
+        new_cols[f"{base_name}_inverted_v"] = ((pattern_matrix[:, 0] == -1) & 
+                                         (pattern_matrix[:, 1] == 1) & 
+                                         (pattern_matrix[:, 2] == -1)).astype(int)
     
     # No eliminamos filas con NaN, siguiendo la política establecida
-    return df
+    return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
 
 # 4. Technical Indicators Feature Engineering
@@ -2469,6 +2710,101 @@ def drop_nan_rows(df):
     print(f"  Dropping NaN rows: {rows_before} -> {rows_after} rows ({rows_before - rows_after} rows removed)") # DEBUG
     print("<<< Finished step: drop_nan_rows")
     return df_cleaned
+
+
+def engineer_curated_features(
+    df: pd.DataFrame,
+    close_col: str = 'close',
+    high_col: str = 'high',
+    low_col: str = 'low',
+    open_col: str = 'open',
+    datetime_col: str = 'datetime'
+) -> pd.DataFrame:
+    """
+    Ingenieria de caracteristicas compacta, estacionaria y ortogonal (26 caracteristicas).
+    Elimina la colinealidad de 600 indicadores redundantes y previene el sobreajuste.
+
+    Caracteristicas generadas:
+      1. Log Returns multi-periodo: 1, 3, 6, 12, 24 velas
+      2. Volatilidad y Regimen: ATR_14 normalizado por precio, ratio de regimen ATR_14/ATR_100
+      3. Osciladores normalizados: RSI_14, Bollinger %B, Bandwidth, MACD Histogram / ATR
+      4. Estructura de Tendencia: Distancia a EMAs (20, 50, 200) divididas por ATR, pendiente EMA20
+      5. Geometria de la vela actual: body ratio, upper/lower wick ratios, rango / ATR
+      6. Contexto temporal y de sesion: Ciclos de hora (sin/cos), dia de la semana, flags de sesiones FX (Londres, NY, Overlap)
+    """
+    df_feat = df.copy()
+    close = df_feat[close_col]
+    high = df_feat[high_col]
+    low = df_feat[low_col]
+    op = df_feat[open_col] if open_col in df_feat.columns else close
+
+    # 1. Log Returns
+    for period in [1, 3, 6, 12, 24]:
+        df_feat[f'log_ret_{period}'] = np.log(close / close.shift(period))
+
+    # 2. True Range & ATR
+    tr1 = high - low
+    tr2 = (high - close.shift(1)).abs()
+    tr3 = (low - close.shift(1)).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr_14 = tr.rolling(14).mean()
+    atr_100 = tr.rolling(100).mean()
+    df_feat['ATR_14'] = atr_14
+    df_feat['atr_14_norm'] = atr_14 / close
+    df_feat['volatility_regime'] = atr_14 / atr_100.replace(0, np.nan)
+
+    # 3. Osciladores
+    delta = close.diff()
+    gain = delta.where(delta > 0, 0.0).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0.0)).rolling(14).mean()
+    rs = gain / loss.replace(0, np.nan)
+    df_feat['rsi_14'] = 100.0 - (100.0 / (1.0 + rs))
+
+    bb_mid = close.rolling(20).mean()
+    bb_std = close.rolling(20).std()
+    bb_upper = bb_mid + 2.0 * bb_std
+    bb_lower = bb_mid - 2.0 * bb_std
+    df_feat['bb_percent_b'] = (close - bb_lower) / (bb_upper - bb_lower).replace(0, np.nan)
+    df_feat['bb_bandwidth'] = (bb_upper - bb_lower) / bb_mid.replace(0, np.nan)
+
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+    macd = ema12 - ema26
+    signal = macd.ewm(span=9, adjust=False).mean()
+    df_feat['macd_hist_norm'] = (macd - signal) / atr_14.replace(0, np.nan)
+
+    # 4. Distancias a EMAs normalizadas a ATR
+    for span in [20, 50, 200]:
+        ema = close.ewm(span=span, adjust=False).mean()
+        df_feat[f'dist_to_ema{span}_atr'] = (close - ema) / atr_14.replace(0, np.nan)
+    ema20 = close.ewm(span=20, adjust=False).mean()
+    df_feat['ema_slope_20'] = (ema20 - ema20.shift(3)) / atr_14.replace(0, np.nan)
+
+    # 5. Geometria de la vela
+    candle_range = (high - low).replace(0, np.nan)
+    df_feat['candle_body_ratio'] = (close - op).abs() / candle_range
+    df_feat['candle_upper_wick_ratio'] = (high - pd.concat([op, close], axis=1).max(axis=1)) / candle_range
+    df_feat['candle_lower_wick_ratio'] = (pd.concat([op, close], axis=1).min(axis=1) - low) / candle_range
+    df_feat['candle_range_to_atr'] = candle_range / atr_14.replace(0, np.nan)
+
+    # 6. Contexto de tiempo y sesion
+    time_series = None
+    if datetime_col in df_feat.columns:
+        time_series = pd.to_datetime(df_feat[datetime_col], utc=True)
+    elif isinstance(df_feat.index, pd.DatetimeIndex):
+        time_series = df_feat.index
+
+    if time_series is not None:
+        hour = time_series.dt.hour if hasattr(time_series, 'dt') else time_series.hour
+        dayofweek = time_series.dt.dayofweek if hasattr(time_series, 'dt') else time_series.dayofweek
+        df_feat['hour_sin'] = np.sin(2 * np.pi * hour / 24.0)
+        df_feat['hour_cos'] = np.cos(2 * np.pi * hour / 24.0)
+        df_feat['day_of_week'] = dayofweek
+        df_feat['is_london_session'] = ((hour >= 7) & (hour < 16)).astype(int)
+        df_feat['is_ny_session'] = ((hour >= 12) & (hour < 21)).astype(int)
+        df_feat['is_overlap_session'] = ((hour >= 12) & (hour < 16)).astype(int)
+
+    return df_feat
 
 
 def engineer_features(df, n_candles=6, n_clusters=8, min_pattern_threshold=10, clusterer=None, fit_clusterer=False, random_state=42):

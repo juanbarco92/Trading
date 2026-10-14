@@ -15,6 +15,7 @@ from ibapi.wrapper import EWrapper
 from ibapi.utils import iswrapper
 from ibapi.contract import Contract
 from ibapi.common import BarData # Import BarData
+from ibapi.order import Order # Import Order
 
 SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if SRC_DIR not in sys.path:
@@ -103,6 +104,20 @@ class RealTimeAggregatorSaver(EClient, EWrapper):
     N_CLUSTERS_PARAM = 5 
     MIN_PATTERN_THRESHOLD_PARAM = 100 
 
+    # --- Trading Configuration ---
+    TRADE_ENABLED = True # Master switch to enable/disable trading
+    ORDER_QUANTITY = 10000 # Example: Trade 10,000 units (micro-lot)
+    TAKE_PROFIT_PIPS = 25.0
+    STOP_LOSS_PIPS = 10.0
+    PIP_DEFINITION = { # Define pip size for currency pairs
+        'USD': 0.0001, # For pairs like EURUSD, GBPUSD
+        'JPY': 0.01,   # For pairs like USDJPY, EURJPY
+        'CAD': 0.0001, # For pairs like USDCAD
+        # Add other quote currencies as needed
+    }
+    ORDER_TIF = "GTC" # Time-In-Force for orders (Good-'Til-Canceled)
+    # --- End Trading Configuration ---
+
     # --- End Configuration ---
 
     def __init__(self, contracts: ContractDict):
@@ -131,6 +146,8 @@ class RealTimeAggregatorSaver(EClient, EWrapper):
 
         # --- Cargar Modelos ---
         self._load_models()
+
+        self.open_orders = {} # Para rastrear IDs de órdenes activas {aggregator_key: parent_order_id}
 
     def _load_models(self):
         """Carga los modelos de predicción para los contratos configurados."""
@@ -188,6 +205,136 @@ class RealTimeAggregatorSaver(EClient, EWrapper):
                     logger.error(f"ERROR al cargar modelos para {aggregator_key}: {e}", exc_info=True)
                     logger.error(f"  La predicción para {aggregator_key} estará deshabilitada.")
 
+    def _get_pip_value(self, contract: Contract) -> float:
+        """Determina el valor de un pip o punto basado en el tipo de contrato y moneda."""
+        sec_type = getattr(contract, 'secType', None)
+        if sec_type == "STK":
+            return 0.01  # Centavo para acciones/ETFs
+        if sec_type == "FUT":
+            symbol = getattr(contract, 'symbol', '')
+            if symbol in ['MES', 'ES', 'MNQ', 'NQ']:
+                return 0.25
+            return 0.01
+
+        quote_currency = contract.currency
+        pip_value = self.PIP_DEFINITION.get(quote_currency)
+        if pip_value is None:
+            logger.warning(f"Definición de PIP no encontrada para la moneda de cotización '{quote_currency}'. Usando 0.0001 por defecto.")
+            return 0.0001 # Valor por defecto si no se encuentra
+        return pip_value
+
+    def _place_bracket_order(self, aggregator_key: str, contract: Contract, action: str, quantity: float, entry_price: float, tp_pips: float, sl_pips: float):
+        """Crea y envía una orden bracket (Market + TP + SL)."""
+        if not self.TRADE_ENABLED:
+            logger.info(f"[{aggregator_key}] Trading deshabilitado. Orden {action} no enviada.")
+            return
+
+        if self.next_valid_order_id is None:
+            logger.error(f"[{aggregator_key}] No se puede colocar la orden {action}, nextValidId es None.")
+            return
+
+        # Verificar si ya hay una orden abierta para este instrumento
+        if aggregator_key in self.open_orders:
+             logger.warning(f"[{aggregator_key}] Ya existe una orden activa ({self.open_orders[aggregator_key]}). No se colocará una nueva orden {action}.")
+             return
+
+        pip_value = self._get_pip_value(contract)
+        tick_size = pip_value # Asumimos que el tick size es igual al pip value para Forex
+
+        # --- Calcular precios TP y SL ---
+        if action == "BUY":
+            tp_price = round(entry_price + tp_pips * pip_value, 5) # Redondear a 5 decimales (ajustar si es JPY)
+            sl_price = round(entry_price - sl_pips * pip_value, 5)
+        elif action == "SELL":
+            tp_price = round(entry_price - tp_pips * pip_value, 5)
+            sl_price = round(entry_price + sl_pips * pip_value, 5)
+        else:
+            logger.error(f"[{aggregator_key}] Acción desconocida '{action}' para _place_bracket_order.")
+            return
+
+        # Asegurar que los precios TP/SL no sean exactamente iguales al precio de entrada (poco probable con floats)
+        if abs(tp_price - entry_price) < tick_size / 2 or abs(sl_price - entry_price) < tick_size / 2:
+             logger.warning(f"[{aggregator_key}] TP ({tp_price}) o SL ({sl_price}) demasiado cerca del precio de entrada ({entry_price}). Ajustando ligeramente.")
+             # Ajuste mínimo (ej. medio tick) - esto podría necesitar refinamiento
+             if action == "BUY":
+                 if abs(tp_price - entry_price) < tick_size / 2: tp_price = round(entry_price + tick_size, 5)
+                 if abs(sl_price - entry_price) < tick_size / 2: sl_price = round(entry_price - tick_size, 5)
+             else: # SELL
+                 if abs(tp_price - entry_price) < tick_size / 2: tp_price = round(entry_price - tick_size, 5)
+                 if abs(sl_price - entry_price) < tick_size / 2: sl_price = round(entry_price + tick_size, 5)
+             logger.warning(f"[{aggregator_key}] Precios ajustados: TP={tp_price}, SL={sl_price}")
+
+
+        # --- Crear Órdenes ---
+        orders = []
+        parent_order_id = self.next_valid_order_id
+
+        # 1. Orden Principal (Market)
+        parent_order = Order()
+        parent_order.orderId = parent_order_id
+        parent_order.action = action
+        parent_order.orderType = "MKT" # Orden a Mercado
+        parent_order.totalQuantity = quantity
+        parent_order.transmit = False # NO transmitir aún, esperar a los hijos
+        parent_order.tif = self.ORDER_TIF
+        orders.append(parent_order)
+
+        # 2. Orden Take Profit (Limit)
+        tp_order = Order()
+        tp_order.orderId = parent_order_id + 1
+        tp_order.action = "SELL" if action == "BUY" else "BUY" # Acción opuesta
+        tp_order.orderType = "LMT" # Orden Límite
+        tp_order.totalQuantity = quantity
+        tp_order.lmtPrice = tp_price # Precio límite es el precio TP
+        tp_order.parentId = parent_order_id # Enlazar a la orden principal
+        tp_order.transmit = False # NO transmitir aún
+        tp_order.tif = self.ORDER_TIF
+        orders.append(tp_order)
+
+        # 3. Orden Stop Loss (Stop)
+        sl_order = Order()
+        sl_order.orderId = parent_order_id + 2
+        sl_order.action = "SELL" if action == "BUY" else "BUY" # Acción opuesta
+        sl_order.orderType = "STP" # Orden Stop
+        sl_order.auxPrice = sl_price # Precio de disparo es el precio SL
+        sl_order.totalQuantity = quantity
+        sl_order.parentId = parent_order_id # Enlazar a la orden principal
+        sl_order.transmit = True # SÍ transmitir la última orden del grupo
+        sl_order.tif = self.ORDER_TIF
+        orders.append(sl_order)
+
+        # Incrementar next_valid_order_id para las próximas órdenes
+        self.next_valid_order_id += 3
+
+        # --- Enviar Órdenes ---
+        logger.info(f"[{aggregator_key}] Enviando orden BRACKET {action} {quantity} @ MKT (TP: {tp_price}, SL: {sl_price})")
+        for order in orders:
+            logger.info(f"  -> Colocando OrderId: {order.orderId}, ParentId: {order.parentId}, Action: {order.action}, Type: {order.orderType}, Qty: {order.totalQuantity}, Lmt/Stp: {order.lmtPrice or order.auxPrice}, Transmit: {order.transmit}")
+            self.placeOrder(order.orderId, contract, order)
+
+        # Guardar el ID de la orden principal para evitar duplicados
+        self.open_orders[aggregator_key] = parent_order_id
+        logger.info(f"[{aggregator_key}] Orden principal {parent_order_id} registrada como activa.")
+
+
+    @iswrapper
+    def orderStatus(self, orderId: int, status: str, filled: float, remaining: float, avgFillPrice: float, permId: int, parentId: int, lastFillPrice: float, clientId: int, whyHeld: str, mktCapPrice: float):
+        super().orderStatus(orderId, status, filled, remaining, avgFillPrice, permId, parentId, lastFillPrice, clientId, whyHeld, mktCapPrice)
+        logger.info(f"OrderStatus. Id: {orderId}, Status: {status}, Filled: {filled}, Remaining: {remaining}, AvgFillPrice: {avgFillPrice}, ParentId: {parentId}")
+
+        # Si una orden se cancela o se llena completamente, eliminarla de nuestro rastreador
+        if status in ["Filled", "Cancelled", "ApiCancelled", "Inactive"]:
+             # Buscar qué aggregator_key corresponde a esta orden (o su padre)
+             key_to_remove = None
+             for key, open_order_id in list(self.open_orders.items()):
+                 # Si la orden cerrada es la principal O una hija de la principal
+                 if orderId == open_order_id or parentId == open_order_id:
+                     key_to_remove = key
+                     break
+
+             if key_to_remove and key_to_remove in self.open_orders:
+                 removed_id = self.open_orders.pop(key_to_remove)
+                 logger.info(f"Orden {removed_id} (o hija {orderId}) para {key_to_remove} ya no está activa (Status: {status}). Eliminada del rastreador.")
 
     # --- Connection Handling ---
     @iswrapper
@@ -739,6 +886,7 @@ class RealTimeAggregatorSaver(EClient, EWrapper):
 
         try:
             prediction_features = latest_features.copy()
+            metadata = models.get('metadata', {}) # Obtener metadata
 
             # Asegurarse de que todas las columnas que espera el pipeline están presentes ANTES de predecir
             final_required_cols = pipeline.feature_names_in_
@@ -752,23 +900,82 @@ class RealTimeAggregatorSaver(EClient, EWrapper):
             logger.debug(f"Columnas finales para predicción ({aggregator_key}): {final_required_cols}")
             prediction_input = prediction_features[final_required_cols]
 
-            prediction = pipeline.predict(prediction_input)
-            prediction_proba = pipeline.predict_proba(prediction_input)
+            # --- Lógica de Predicción con Umbrales ---
+            # Obtener probabilidades
+            prediction_proba = pipeline.predict_proba(prediction_input)[0] # [0] para obtener el array de la primera (y única) predicción
 
+            # Obtener nombres de clases y mapear a probabilidades
+            if not hasattr(pipeline, 'classes_'):
+                 logger.error(f"Pipeline para {aggregator_key} no tiene atributo 'classes_'. No se pueden aplicar umbrales.")
+                 return
+            classes = pipeline.classes_
+            proba_map = {class_name: prob for class_name, prob in zip(classes, prediction_proba)}
+
+            # Obtener umbrales desde metadata (con valores por defecto seguros si no existen)
+            # Usamos 1.01 como default para que nunca se active si no está en metadata
+            buy_threshold = metadata.get('optimal_buy_threshold', 1.01)
+            sell_threshold = metadata.get('optimal_sell_threshold', 1.01)
+
+            # Asumir nombres de clases estándar (ajustar si son diferentes en tu modelo)
+            buy_class_name = 'objetivo_compra_alcanzado'
+            sell_class_name = 'objetivo_venta_alcanzado'
+            neutral_class_name = 'no_objetivo_alcanzado' # O la clase que represente "no hacer nada"
+
+            prob_buy = proba_map.get(buy_class_name, 0.0)
+            prob_sell = proba_map.get(sell_class_name, 0.0)
+
+            # Determinar predicción final basada en umbrales
+            final_prediction = neutral_class_name # Predicción por defecto
+
+            # Priorizar la señal con mayor probabilidad si ambas superan el umbral
+            if prob_buy >= buy_threshold and prob_buy >= prob_sell:
+                 final_prediction = buy_class_name
+            elif prob_sell >= sell_threshold and prob_sell > prob_buy: # Usar > para evitar conflicto si prob_buy == prob_sell
+                 final_prediction = sell_class_name
+            # Si ninguna supera su umbral, se mantiene neutral_class_name
+
+            # --- Logging ---
             bar_time_str = latest_features.index[0].strftime('%Y-%m-%d %H:%M:%S')
             logger.info(f"--- Predicción para {aggregator_key} @ {bar_time_str} ---")
-            logger.info(f"    Predicción   : {prediction[0]}")
-            if hasattr(pipeline, 'classes_'):
-                classes = pipeline.classes_
-                proba_dict = {f"Prob({c})": f"{p:.4f}" for c, p in zip(classes, prediction_proba[0])}
-                logger.info(f"    Probabilidades: {proba_dict}")
-            else:
-                 logger.info(f"    Probabilidades: {prediction_proba[0]}")
+            logger.info(f"    Umbrales     : Compra={buy_threshold:.4f}, Venta={sell_threshold:.4f}")
+            logger.info(f"    Probabilidades: { {f'Prob({c})': f'{p:.4f}' for c, p in proba_map.items()} }")
+            logger.info(f"    Predicción Final (con umbral): {final_prediction}") # Mostrar la predicción final
             logger.info(f"---------------------------------------------------------")
 
-        except Exception as e:
-            logger.error(f"ERROR durante la predicción del modelo para {aggregator_key}: {e}", exc_info=True)
+            # --- Ejecutar Orden si la predicción es Compra o Venta ---
+            if final_prediction == buy_class_name or final_prediction == sell_class_name:
+                # Necesitamos el contrato y el precio de cierre de la vela actual
+                request_info = self.requests.get(self.get_request_id_by_key(aggregator_key, 'realtime')) # Necesitas una forma de obtener el reqId de tiempo real
+                if request_info:
+                    contract = request_info['contract']
+                    # Obtener el precio de cierre de la vela que generó la predicción
+                    # Asumiendo que latest_features tiene el índice correcto y la columna 'close'
+                    entry_price = latest_features['close'].iloc[0]
 
+                    action = "BUY" if final_prediction == buy_class_name else "SELL"
+
+                    self._place_bracket_order(
+                        aggregator_key=aggregator_key,
+                        contract=contract,
+                        action=action,
+                        quantity=self.ORDER_QUANTITY,
+                        entry_price=entry_price,
+                        tp_pips=self.TAKE_PROFIT_PIPS,
+                        sl_pips=self.STOP_LOSS_PIPS
+                    )
+                else:
+                    logger.error(f"No se pudo encontrar la información del request para {aggregator_key} para colocar la orden.")
+
+        except Exception as e:
+            logger.error(f"ERROR durante la predicción o colocación de orden para {aggregator_key}: {e}", exc_info=True)
+
+    # --- Helper para obtener reqId (necesario para el paso anterior) ---
+    def get_request_id_by_key(self, aggregator_key: str, request_type: str) -> Optional[int]:
+         """Encuentra el reqId asociado con un aggregator_key y tipo de request."""
+         for req_id, info in self.requests.items():
+             if info.get('aggregator_key') == aggregator_key and info.get('type') == request_type:
+                 return req_id
+         return None
 
     # --- Saving Logic ---
     def check_and_save_aggregated_data(self, aggregator_key: str, completed_bar_start_time_utc: datetime):
