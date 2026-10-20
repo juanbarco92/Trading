@@ -5,6 +5,7 @@ from numpy.lib.stride_tricks import sliding_window_view
 from itertools import combinations
 import os
 from typing import Optional, List, Dict, Union, Tuple
+from src.models.labeling import generate_triple_barrier_labels
 
 def read_csv_files(folder_path):
     # List all CSV files in the folder
@@ -2255,94 +2256,87 @@ def fractal_engineering(df, window_sizes=[5], lookback=10, high_col='high', low_
         half_window = window // 2
         base_name = f"FRACTAL_{window}"
         
-        # 1. Identificar fractales alcistas (bullish)
-        # Un fractal alcista ocurre cuando una vela tiene el máximo más alto que n velas a cada lado
+        # 1. Identificar fractales alcistas (bullish) y bajistas (bearish) de forma 100% CAUSAL
+        # Un fractal centrado en (t - half_window) se confirma ESTRICTAMENTE en la barra t
+        # (cuando la barra t cierra, disponemos de las n velas a la derecha sin mirar al futuro).
         bullish_fractal = np.zeros(len(df))
-        
-        for i in range(half_window, len(df) - half_window):
-            # Verificar que el máximo central sea mayor que todos los máximos circundantes
-            is_bullish = True
-            central_high = df[high_col].iloc[i]
-            
-            for j in range(1, half_window + 1):
-                if (df[high_col].iloc[i-j] >= central_high) or (df[high_col].iloc[i+j] >= central_high):
-                    is_bullish = False
-                    break
-            
-            if is_bullish:
-                bullish_fractal[i] = 1
-                
-        # 2. Identificar fractales bajistas (bearish)
-        # Un fractal bajista ocurre cuando una vela tiene el mínimo más bajo que n velas a cada lado
         bearish_fractal = np.zeros(len(df))
+        bullish_price = np.full(len(df), np.nan)
+        bearish_price = np.full(len(df), np.nan)
         
-        for i in range(half_window, len(df) - half_window):
-            # Verificar que el mínimo central sea menor que todos los mínimos circundantes
-            is_bearish = True
-            central_low = df[low_col].iloc[i]
+        high_vals = df[high_col].to_numpy(dtype=np.float64)
+        low_vals = df[low_col].to_numpy(dtype=np.float64)
+        
+        for t in range(window - 1, len(df)):
+            central_idx = t - half_window
+            central_high = high_vals[central_idx]
+            central_low = low_vals[central_idx]
             
-            for j in range(1, half_window + 1):
-                if (df[low_col].iloc[i-j] <= central_low) or (df[low_col].iloc[i+j] <= central_low):
-                    is_bearish = False
-                    break
+            # Sub-ventana causal: [t - 2*half_window : t + 1]
+            window_high = high_vals[t - 2 * half_window : t + 1]
+            window_low = low_vals[t - 2 * half_window : t + 1]
             
-            if is_bearish:
-                bearish_fractal[i] = 1
+            # Es fractal alcista si el punto central es el máximo estricto de la ventana
+            if central_high == np.max(window_high) and np.sum(window_high == central_high) == 1:
+                bullish_fractal[t] = 1
+                bullish_price[t] = central_high
+                
+            # Es fractal bajista si el punto central es el mínimo estricto de la ventana
+            if central_low == np.min(window_low) and np.sum(window_low == central_low) == 1:
+                bearish_fractal[t] = 1
+                bearish_price[t] = central_low
         
         # Guardar los fractales identificados en el DataFrame
         new_cols[f"{base_name}_bullish"] = bullish_fractal
         new_cols[f"{base_name}_bearish"] = bearish_fractal
         
-        # Capturar los valores de precio donde ocurren los fractales
-        new_cols[f"{base_name}_bullish_price"] = np.where(bullish_fractal == 1, df[high_col], np.nan)
-        new_cols[f"{base_name}_bearish_price"] = np.where(bearish_fractal == 1, df[low_col], np.nan)
+        # Capturar los valores de precio donde ocurren los fractales (confirmados en t)
+        new_cols[f"{base_name}_bullish_price"] = bullish_price
+        new_cols[f"{base_name}_bearish_price"] = bearish_price
         
-        # 3. Distancia entre fractales sucesivos (en barras)
-        # Calcular la distancia desde el último fractal alcista/bajista
-        last_bullish_idx = 0
-        last_bearish_idx = 0
-        bullish_distances = np.zeros(len(df))
-        bearish_distances = np.zeros(len(df))
+        # 3. Distancia entre fractales sucesivos (en barras) de forma causal
+        bullish_distances = np.full(len(df), 999.0)
+        bearish_distances = np.full(len(df), 999.0)
+        last_bull_peak_idx = -999
+        last_bear_peak_idx = -999
         
-        for i in range(len(df)):
-            if bullish_fractal[i] == 1:
-                for j in range(last_bullish_idx, i + 1):
-                    bullish_distances[j] = i - last_bullish_idx
-                last_bullish_idx = i
-            
-            if bearish_fractal[i] == 1:
-                for j in range(last_bearish_idx, i + 1):
-                    bearish_distances[j] = i - last_bearish_idx
-                last_bearish_idx = i
+        for t in range(len(df)):
+            if bullish_fractal[t] == 1:
+                last_bull_peak_idx = t - half_window
+            if last_bull_peak_idx >= 0:
+                bullish_distances[t] = float(t - last_bull_peak_idx)
+                
+            if bearish_fractal[t] == 1:
+                last_bear_peak_idx = t - half_window
+            if last_bear_peak_idx >= 0:
+                bearish_distances[t] = float(t - last_bear_peak_idx)
         
         new_cols[f"{base_name}_bull_distance"] = bullish_distances
         new_cols[f"{base_name}_bear_distance"] = bearish_distances
         
         # 4. Dirección del fractal (alcista o bajista)
-        # 1 para alcista, -1 para bajista, 0 para sin fractal
         new_cols[f"{base_name}_direction"] = np.where(
             bullish_fractal == 1, 1, np.where(
                 bearish_fractal == 1, -1, 0
             )
         )
         
-        # 5. Fortaleza del fractal (diferencia porcentual entre el fractal y el precio anterior)
+        # 5. Fortaleza del fractal confirmada en t
         new_cols[f"{base_name}_bullish_strength"] = np.where(
             bullish_fractal == 1, 
-            (df[high_col] / df[close_col].shift(1) - 1) * 100,
+            (bullish_price / df[close_col].shift(1) - 1) * 100,
             np.nan
         )
         
         new_cols[f"{base_name}_bearish_strength"] = np.where(
             bearish_fractal == 1, 
-            (1 - df[low_col] / df[close_col].shift(1)) * 100,
+            (1 - bearish_price / df[close_col].shift(1)) * 100,
             np.nan
         )
         
-        # 6. Líneas de tendencia basadas en fractales
-        # Forward fill los precios de los fractales para crear líneas de tendencia
-        bull_trend_line = pd.Series(np.where(bullish_fractal == 1, df[high_col], np.nan), index=df.index).fillna(method='ffill')
-        bear_trend_line = pd.Series(np.where(bearish_fractal == 1, df[low_col], np.nan), index=df.index).fillna(method='ffill')
+        # 6. Líneas de tendencia basadas en fractales (causal ffill)
+        bull_trend_line = pd.Series(bullish_price, index=df.index).ffill()
+        bear_trend_line = pd.Series(bearish_price, index=df.index).ffill()
         
         new_cols[f"{base_name}_bull_trend_line"] = bull_trend_line
         new_cols[f"{base_name}_bear_trend_line"] = bear_trend_line
@@ -2351,12 +2345,9 @@ def fractal_engineering(df, window_sizes=[5], lookback=10, high_col='high', low_
         new_cols[f"{base_name}_bull_break"] = (df[close_col] > bull_trend_line).astype(int)
         new_cols[f"{base_name}_bear_break"] = (df[close_col] < bear_trend_line).astype(int)
     
-        # 8. Canales de fractales (líneas de tendencia superior e inferior)
-        bullish_price_series = pd.Series(np.where(bullish_fractal == 1, df[high_col], np.nan), index=df.index)
-        bearish_price_series = pd.Series(np.where(bearish_fractal == 1, df[low_col], np.nan), index=df.index)
-        
-        upper_channel = bullish_price_series.rolling(lookback).max().fillna(method='ffill')
-        lower_channel = bearish_price_series.rolling(lookback).min().fillna(method='ffill')
+        # 8. Canales de fractales causales
+        upper_channel = pd.Series(bullish_price, index=df.index).rolling(lookback, min_periods=1).max().ffill()
+        lower_channel = pd.Series(bearish_price, index=df.index).rolling(lookback, min_periods=1).min().ffill()
         
         new_cols[f"{base_name}_upper_channel"] = upper_channel
         new_cols[f"{base_name}_lower_channel"] = lower_channel
@@ -2395,6 +2386,8 @@ def fractal_engineering(df, window_sizes=[5], lookback=10, high_col='high', low_
         # 12. Frecuencia de fractales (conteo en ventana móvil)
         bullish_fractal_series = pd.Series(bullish_fractal, index=df.index)
         bearish_fractal_series = pd.Series(bearish_fractal, index=df.index)
+        bullish_price_series = pd.Series(bullish_price, index=df.index)
+        bearish_price_series = pd.Series(bearish_price, index=df.index)
         
         bull_freq = bullish_fractal_series.rolling(lookback).sum()
         bear_freq = bearish_fractal_series.rolling(lookback).sum()

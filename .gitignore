@@ -1,47 +1,31 @@
-# Bytecode and cache
+# Environments
+.venv/
+env/
+venv/
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
 .pytest_cache/
 
-# Virtual Environments
-.venv/
-venv/
-env/
-ENV/
+# Data directories (large parquets and historical CSVs)
+data/
+data_ibkr/
+data_cache/
+data_realtime_aggregated/
+**/*.parquet
+**/*.csv
 
-# Environment variables & Secrets
-.env
-.env.*
-*.env
-*.pem
-*.key
-credentials/
-secrets/
+# Large model binaries
+**/*.joblib
+**/*.pkl
+**/*.bin
+**/*.pt
+models/checkpoints/
+models/EURUSD/
+models/GBPUSD/
+models/equities/
 
-# Logs and runtime outputs
+# OS and Logs
 *.log
-logs/
-*.tmp
-*.bak
-
-# Jupyter Notebook checkpoints
-.ipynb_checkpoints*/
-
-# IDE and OS files
-.vscode/
-.idea/
 .DS_Store
 Thumbs.db
-
-# Data and Models
-data/
-data_realtime_aggregated/
-models/
-ForexDataExtractorProject/data/
-ForexDataExtractorProject/data_realtime_aggregated/
-ForexDataExtractorProject/models/
-*.joblib
-*.pkl
-*.h5
